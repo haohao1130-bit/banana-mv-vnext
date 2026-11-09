@@ -372,7 +372,7 @@ class ShootPlanTests(unittest.TestCase):
                 validate_native_mv_format(native(bad),10)
 
     def test_native_shot_replay_is_rejected_but_reactions_are_allowed(self):
-        from banana_mv.shoot_plan import validate_native_mv_format
+        from banana_mv.shoot_plan import validate_native_mv_format, native_shot_replay_warning
         def native(body):
             return ('subject_definitions:\n<Subject 1> is the fighter from <Picture 1>.\n\n'
                     'summary:\nA continuing fight.\n\n'
@@ -383,16 +383,16 @@ class ShootPlanTests(unittest.TestCase):
         strike=('The fighter steps inside and lands a hard right uppercut '
                 'that knocks the champion backward against the ropes.')
         repeated=native('[Shot 1] '+strike+'\n[Shot 2] At 00:05.000, '+strike)
-        with self.assertRaisesRegex(ValueError,'重演'):
-            validate_native_mv_format(repeated,15)
+        self.assertEqual(validate_native_mv_format(repeated,15),repeated)
+        self.assertIn('重演',native_shot_replay_warning(repeated))
         continuation=native('[Shot 1] '+strike+
             '\n[Shot 2] At 00:05.000, The champion braces against the ropes, '
             'blinks, and steadies his footing while the fighter backs away.')
         self.assertEqual(validate_native_mv_format(continuation,15),continuation)
         replayed_stop=native('[Shot 1] The singer ends the song on a HARD STOP.'
             '\n[Shot 2] At 00:05.000, The singer repeats the line on another HARD STOP.')
-        with self.assertRaisesRegex(ValueError,'HARD STOP'):
-            validate_native_mv_format(replayed_stop,15)
+        self.assertEqual(validate_native_mv_format(replayed_stop,15),replayed_stop)
+        self.assertIn('HARD STOP',native_shot_replay_warning(replayed_stop))
 
     def test_native_mv_speaker_id_preserves_source_audio_identity(self):
         from banana_mv.shoot_plan import validate_native_mv_format
