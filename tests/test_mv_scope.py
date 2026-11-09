@@ -51,6 +51,31 @@ class ScopeTests(unittest.TestCase):
             contract=ending_contract({'project_scope':'full'},total,segments(total,chunk))
             self.assertEqual(contract['resolve_start_by'],latest)
 
+    def test_fixed_three_second_tail_threshold_and_prior_interval_resolution(self):
+        from banana_mv.core import segments
+        for tail, expected in ((2, True), (3, True), (3.01, False), (4, False)):
+            total = 70 + tail
+            clips = segments(total, 10)
+            contract = ending_contract({'project_scope':'full'}, total, clips)
+            with self.subTest(tail=tail):
+                self.assertEqual(bool(contract['short_tail_seconds']), expected)
+                self.assertEqual(contract['resolve_start_by'], 60 if expected else 70)
+                if expected:
+                    self.assertEqual(contract['settle_by'], 70)
+                    last = clip_ending({'project_scope':'full'},
+                                       dict(clips[-1],segment_count=len(clips),
+                                            song_seconds=total,direction_ending_contract=contract))
+                    self.assertEqual(last['phase'], 'terminal_hold')
+                    self.assertEqual(last['local_settle_by'], 0)
+                else:
+                    self.assertGreater(contract['settle_by'], 70)
+
+    def test_full_length_last_interval_does_not_count_as_short_tail(self):
+        from banana_mv.core import segments
+        contract = ending_contract({'project_scope':'full'}, 70, segments(70, 10))
+        self.assertEqual(contract['short_tail_seconds'], 0)
+        self.assertEqual(contract['resolve_start_by'], 60)
+
     def test_full_plan_requires_real_time_for_resolution_and_hold(self):
         raw=full_plan();before=deepcopy(raw)
         plan=validate_unified_plan(raw,timeline(),1,{'project_scope':'full'})
