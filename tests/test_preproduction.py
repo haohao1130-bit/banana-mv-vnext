@@ -109,6 +109,39 @@ class PreproductionTests(unittest.TestCase):
                     if other!=i:self.assertNotIn(f'Event {other}.',text)
                 self.assertEqual((root/f'preproduction/{i:02d}_prompt.txt').read_text(),fixtures.native_prompt(i))
 
+    def test_legacy_and_preproduction_share_local_commission_for_same_script(self):
+        from banana_mv.shoot_plan import write_shoot_prompt, LOCAL_FILMING_COMMISSION
+        # Old MV terminal hold, action handoff, and return from a parallel strand.
+        cases=[
+            'Opening state: The man is already slumped in his chair. New progression: Breathing and a slow reframe. Outgoing state: He remains slumped.',
+            'Opening state: The opponent is already moving backward. New progression: He hits the railing and regains his footing. Outgoing state: Guard raised.',
+            'Opening state: The ring exchange has paused at distance. New progression: The stage singer performs; return to the ring for a new feint. Outgoing state: The guard reacts.',
+        ]
+        for event in cases:
+            for faithful in (False,True):
+                with self.subTest(event=event,faithful=faithful),tempfile.TemporaryDirectory() as tmp:
+                    root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+                    req.update(camera_review=False,story_plan=not faithful)
+                    seg=dict(timeline()[0],director_plan={'event':event,'mode':'story','handoff_version':1},
+                             fixed_reference_settings='<Picture 1> identifies the singer; <Picture 2> identifies the opponent.')
+                    before=copy.deepcopy(seg)
+                    legacy=Mock(return_value=fixtures.native_prompt(0))
+                    write_shoot_prompt(cfg,req,seg,images,None,legacy)
+                    fresh=Mock(return_value=fixtures.native_prompt(0))
+                    prepare(cfg,{'request':req,'segments':[before]},images,root,fresh)
+                    old_input=legacy.call_args.args[2][0][1]
+                    system=fresh.call_args.args[1];payload=json.loads(fresh.call_args.args[2][0][1])
+                    self.assertIn(LOCAL_FILMING_COMMISSION,old_input)
+                    self.assertIn(LOCAL_FILMING_COMMISSION,system)
+                    self.assertIn(event,old_input)
+                    self.assertEqual(payload['current_clip']['event'],event)
+                    self.assertEqual(payload['current_clip']['fixed_reference_settings'],before['fixed_reference_settings'])
+                    policy='ADAPTATION: FAITHFUL' if faithful else 'ADAPTATION: FREE'
+                    self.assertIn(policy,old_input);self.assertIn(policy,payload['direction'])
+                    self.assertNotIn('whole_screenplay',payload)
+                    self.assertEqual(fresh.call_count,1)
+                    self.assertEqual((root/'preproduction/00_prompt.txt').read_text(),fixtures.native_prompt(0))
+
     def test_original_roles_reach_writer_even_when_generated_setup_is_wrong(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)

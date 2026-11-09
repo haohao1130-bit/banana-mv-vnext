@@ -23,6 +23,72 @@ NATIVE_ENHANCER_SYSTEM = (
     "with plain-text headers on separate lines and no Markdown fences.\n\n"
 )
 
+
+# Shared by the legacy worker and whole-song preproduction.
+LOCAL_FILMING_COMMISSION = """Enhance this ONE clip script into the guide's final native H3 filming prompt,
+including its per-shot composition, lighting, actions and camera movement.
+When audio_evidence.music_structure is supplied, use its predicted local section
+changes and selected downbeats to motivate action payoffs, camera reveals and
+performance highlights. Write their timing into the shots, not an analysis appendix.
+Keep anticipation and contrast; do not cut on every beat. Labels can be wrong and
+do not identify instruments or override vocal roles. Use loudness only as acoustic evidence.
+The Current clip script is the authority for events, their causal order and the
+local end state. fixed_reference_settings supplies identities, appearances, locations
+and invariant performance rules only; it cannot authorize another plot event.
+If legacy fixed settings mention a whole-work outcome or final image, do not stage
+it unless this clip's commission explicitly assigns it. Neither a required eventual
+outcome nor an available prop makes it happen in this interval.
+Use the current clip's assigned beat and end state as the scope for visual development.
+Reach the commissioned local narrative state without acting out a closing beat:
+for continuing intervals, performance, movement, reactions and ongoing action
+remain in progress through the technical boundary; do not stage a pause, victory
+pose, reset, farewell, fade, or miniature ending to mark the clip's last second.
+A victory does not itself authorize an award ceremony or final gag. Do not add a future-event teaser shot. The interval
+explicitly assigned the resolution must still film it, including a preceding full
+interval assigned decisive events before a tiny residual tail. A first_frame is
+already visible continuity, not permission to invent the next plot milestone.
+Apply the adaptation policy below within that local scope. The commission supplies
+the needed current facts, opening state, events and local end state. Design compelling
+performance, coverage and montage to realize it. Use its assigned locations and asset roles;
+keep separate locations distinct, intercutting them rather than merging their sets or
+placing their casts in one shared frame. Select cast and supporting coverage to serve
+the current beat and adaptation policy, preserving fixed_reference_settings bindings.
+These settings identify assets, not a mandatory cast list. Preserve each commissioned scene-role instance; a shared face does not transfer
+vocal duties between locations. Never substitute <Picture 1> for another named actor.
+Do not infer an actor's role from its apparent species, outfit or upload position.
+Local current-state changes override initial clothing/props while identity stays fixed.
+Available reference images do not require unused characters or locations to appear.
+Original supporting cast in fixed_reference_settings is equally available without a
+reference image. Use the same fixed design and instrument whenever that role returns.
+Do not reject it as "no such character", replace it with referenced cast, or omit a
+requested featured solo/hero shot merely because the performer has no uploaded photo.
+Use the actual reference appearance, not a generic version of its species or object type.
+Preserve current looks and props rather than resetting to
+reference clothing.
+All shot times are LOCAL and within the target duration; alignment
+padding adds no story time. Continue actions across cuts, without replaying the event.
+Use only connected pictures and <Audio 1>: fully_copy. The source audio is supplied to
+H3, not heard by you. Only the assigned vocalist may lip-sync. Add no new speech,
+lyrics, subtitles or a replacement song. Supplied SRT is timing evidence, not dialogue.
+Describe <Audio 1> only as the supplied unchanged source track; you have not heard it.
+Do not claim it contains a whistle, crowd, instruments, low energy or silence unless
+explicitly supported by the supplied evidence. Visible instruments are not heard evidence.
+For source-only delivery, overall_soundscape states source audio unchanged; do not
+invent an audible arena/stage ambience. non_diegetic_music identifies the supplied
+music track, not N/A. Optional external effects are mixed separately, not generated
+by this filming prompt. Their policy is sparse, event-motivated accents with music
+and lead vocals dominant; no continuous crowd bed, repetitive effects or invented dialogue.
+Keep microphone grip and free-hand gestures physically consistent.
+Follow the supplied whole-work ending scope; a continuing clip must not create
+its own ending, stopping pose or dramatic punctuation. A clip's last frame is
+just the next film interval's incoming state, not a cue to end the performance.
+For later clips, the first shot resumes the prior story/action line from its
+current consequence rather than reintroducing or restarting it. Preserve free
+music-video intercuts and parallel storylines: switching strands or camera
+angles does not reset the timeline of any strand.
+Return only the native filming prompt, no analysis, JSON or management instructions.
+"""
+
 CREATIVE_DIRECTION = """ADAPTATION: FREE. Act as an inventive MV director, not a literal script formatter.
 Proactively develop striking visual events, performance business, interactions,
 reaction details and environmental changes that serve the supplied story spine.
@@ -588,69 +654,7 @@ def write_shoot_prompt(cfg,req,segment,originals,tail,rewrite,progress=None):
           "Allocate shot durations and cut timing within the target duration according to content and pacing. "
           "Respect explicit shot requests, reference constraints and the guide's transition rules.\n"
           "Original prompt:\nCurrent clip script:\n"+connected(row['event'])+"\n\n")
-    text+="""Enhance this ONE clip script into the guide's final native H3 filming prompt,
-including its per-shot composition, lighting, actions and camera movement.
-When audio_evidence.music_structure is supplied, use its predicted local section
-changes and selected downbeats to motivate action payoffs, camera reveals and
-performance highlights. Write their timing into the shots, not an analysis appendix.
-Keep anticipation and contrast; do not cut on every beat. Labels can be wrong and
-do not identify instruments or override vocal roles. Use loudness only as acoustic evidence.
-The Current clip script is the authority for events, their causal order and the
-local end state. fixed_reference_settings supplies identities, appearances, locations
-and invariant performance rules only; it cannot authorize another plot event.
-If legacy fixed settings mention a whole-work outcome or final image, do not stage
-it unless this clip's commission explicitly assigns it. Neither a required eventual
-outcome nor an available prop makes it happen in this interval.
-Use the current clip's assigned beat and end state as the scope for visual development.
-Reach the commissioned local narrative state without acting out a closing beat:
-for continuing intervals, performance, movement, reactions and ongoing action
-remain in progress through the technical boundary; do not stage a pause, victory
-pose, reset, farewell, fade, or miniature ending to mark the clip's last second.
-A victory does not itself authorize an award ceremony or final gag. Do not add a future-event teaser shot. The interval
-explicitly assigned the resolution must still film it, including a preceding full
-interval assigned decisive events before a tiny residual tail. A first_frame is
-already visible continuity, not permission to invent the next plot milestone.
-Apply the adaptation policy below within that local scope. The commission supplies
-the needed current facts, opening state, events and local end state. Design compelling
-performance, coverage and montage to realize it. Use its assigned locations and asset roles;
-keep separate locations distinct, intercutting them rather than merging their sets or
-placing their casts in one shared frame. Select cast and supporting coverage to serve
-the current beat and adaptation policy, preserving fixed_reference_settings bindings.
-These settings identify assets, not a mandatory cast list. Never turn the singer
-into the challenger or substitute <Picture 1> for another named actor.
-Do not infer an actor's role from its apparent species, outfit or upload position.
-Local current-state changes override initial clothing/props while identity stays fixed.
-Available reference images do not require unused characters or locations to appear.
-Original supporting cast in fixed_reference_settings is equally available without a
-reference image. Use the same fixed design and instrument whenever that role returns.
-Do not reject it as "no such character", replace it with referenced cast, or omit a
-requested featured solo/hero shot merely because the performer has no uploaded photo.
-Use the actual reference appearance, not a generic version of its species or object type.
-Preserve current looks and props rather than resetting to
-reference clothing.
-All shot times are LOCAL and within the target duration; alignment
-padding adds no story time. Continue actions across cuts, without replaying the event.
-Use only connected pictures and <Audio 1>: fully_copy. The source audio is supplied to
-H3, not heard by you. Only the assigned vocalist may lip-sync. Add no new speech,
-lyrics, subtitles or a replacement song. Supplied SRT is timing evidence, not dialogue.
-Describe <Audio 1> only as the supplied unchanged source track; you have not heard it.
-Do not claim it contains a whistle, crowd, instruments, low energy or silence unless
-explicitly supported by the supplied evidence. Visible instruments are not heard evidence.
-For source-only delivery, overall_soundscape states source audio unchanged; do not
-invent an audible arena/stage ambience. non_diegetic_music identifies the supplied
-music track, not N/A. Optional external effects are mixed separately, not generated
-by this filming prompt. Their policy is sparse, event-motivated accents with music
-and lead vocals dominant; no continuous crowd bed, repetitive effects or invented dialogue.
-Keep microphone grip and free-hand gestures physically consistent.
-Follow the supplied whole-work ending scope; a continuing clip must not create
-its own ending, stopping pose or dramatic punctuation. A clip's last frame is
-just the next film interval's incoming state, not a cue to end the performance.
-For later clips, the first shot resumes the prior story/action line from its
-current consequence rather than reintroducing or restarting it. Preserve free
-music-video intercuts and parallel storylines: switching strands or camera
-angles does not reset the timeline of any strand.
-Return only the native filming prompt, no analysis, JSON or management instructions.
-"""
+    text+=LOCAL_FILMING_COMMISSION
     text+='\n'+adaptation_direction(req)
     text+='\n'+REFERENCE_PERFORMANCE
     text+='\n'+AUTO_FILMING
