@@ -2,7 +2,7 @@
 
 沿用原本一鍵 MV 的前端、Colab 安裝、H3 原曲鎖定、分段、音訊裁切、合成、素材、版本與補拍機制。只把攝影與拍攝稿準備移到開拍之前。
 
-[開啟測試版 Colab](https://colab.research.google.com/github/haohao1130-bit/banana-mv-vnext/blob/feature/whole-song-preproduction/Banana_MV_Public.ipynb)
+[開啟 Colab（主線）](https://colab.research.google.com/github/haohao1130-bit/banana-mv-vnext/blob/main/Banana_MV_Public.ipynb)
 
 使用者已回報前版能完成成片；本次事件轉譯修正仍需另跑新任務驗證畫面。
 
