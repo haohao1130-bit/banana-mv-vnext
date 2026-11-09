@@ -565,6 +565,7 @@ def start(req):
              director_version=2,optimizer_version=1,story_plan=req.get('story_plan', True),
              director_schema=5,h3_validation_version=1,story_scope_version=1,prompt_compiler_version=0,project_scope=req.get('project_scope','full'),
              vnext_preproduction=req.get('rewrite',True),
+             whole_film_version=1 if req.get('rewrite',True) else 0,
              director_authority=bool(req.get('story_plan',True) and req.get('rewrite',True)),
              mv_motion_version=2,
              kitchen_attention=req.get('kitchen_attention',req.get('acceleration',True)),
