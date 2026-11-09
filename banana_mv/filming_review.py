@@ -35,7 +35,7 @@ Do not require an image per instance. Do not judge image contents not supplied.
 
 
 def review_prompt(cfg, req, payload, text, rewrite, originals, work, index):
-    from banana_mv.shoot_plan import _text, _pictures, validate_native_mv_format
+    from banana_mv.shoot_plan import _text, _pictures, validate_native_mv_format, LOCAL_FILMING_COMMISSION
     from banana_mv.core import normalize_mv_prompt
     if not req.get('camera_review',True):return text,{'status':'disabled'}
     folder=Path(work);audit={'status':'unchecked','checks':[],'repairs':[],'warnings':[]}
@@ -61,7 +61,7 @@ def review_prompt(cfg, req, payload, text, rewrite, originals, work, index):
         try:
             # Local replacement only. It sees the current interval and issue evidence,
             # never another interval's full plot or an instruction to rewrite all lyrics.
-            fixed=call('Repair only the evidenced contradictions in this one H3 prompt. Preserve all valid shots, actions, causal progression, style and original audio. Return the complete six-section native prompt.\n'+SCENE_INSTANCE_POLICY+'\n'+OPTIONAL_TIMING_POLICY,
+            fixed=call('Repair only the evidenced contradictions in this one H3 prompt. Preserve all valid shots, actions, causal progression, style and original audio. Return the complete six-section native prompt.\n'+LOCAL_FILMING_COMMISSION+'\n'+SCENE_INSTANCE_POLICY+'\n'+OPTIONAL_TIMING_POLICY,
                 dict(payload,clip_index=index,prompt=current,issues=issues))
             raw_name=f'{index:02d}_filming_repair_{uuid.uuid4().hex[:8]}.txt'
             (folder/raw_name).write_text(fixed,encoding='utf-8')

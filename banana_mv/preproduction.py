@@ -6,7 +6,7 @@ import uuid
 
 from banana_mv.core import normalize_mv_prompt
 from banana_mv.scene_state import atomic_json, parse_object, rewrite_retry_count
-from banana_mv.shoot_plan import _text, _pictures, AUTO_FILMING, DYNAMIC_EDITING, CLIP_INTENSITY, REFERENCE_PERFORMANCE
+from banana_mv.shoot_plan import _text, _pictures, AUTO_FILMING, DYNAMIC_EDITING, CLIP_INTENSITY, REFERENCE_PERFORMANCE, LOCAL_FILMING_COMMISSION, adaptation_direction
 from banana_mv.lyrics_reference import excerpt, OUTPUT_POLICY, OPTIONAL_TIMING_POLICY
 from banana_mv.filming_review import SCENE_INSTANCE_POLICY, review_prompt
 from banana_mv.mv_scope import clip_ending
@@ -168,9 +168,10 @@ def prepare(cfg,job,originals,work,rewrite):
                   'audio_evidence':s.get('audio_evidence',{})} for s in job['segments']]}
     atomic_json(folder/'screenplay.json',screenplay)
     guide=Path(cfg['guides']['ref']).read_text(encoding='utf-8')
-    system=NATIVE_DIRECTOR+'\n'+guide+'\n'+SCENE_INSTANCE_POLICY+'\n'+OPTIONAL_TIMING_POLICY
+    system=(NATIVE_DIRECTOR+'\n'+guide+'\n'+LOCAL_FILMING_COMMISSION+'\n'+
+            SCENE_INSTANCE_POLICY+'\n'+OPTIONAL_TIMING_POLICY)
     req=job['request']
-    style=AUTO_FILMING+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]
+    style=adaptation_direction(req)+'\n'+AUTO_FILMING+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]
     style+='\n'+(DYNAMIC_EDITING if req.get('dynamic_cuts',True) else 'Prefer motivated longer takes.')
     # Write against the original image numbering. At render time chain mode adds
     # its actual preceding frame, so shift original references only after writing.
