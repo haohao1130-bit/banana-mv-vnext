@@ -21,6 +21,21 @@ def cameras():
 
 
 class PreproductionTests(unittest.TestCase):
+    def test_vnext_residual_tail_uses_current_three_second_threshold(self):
+        from banana_mv.mv_scope import ending_contract,clip_ending
+        req={'vnext_preproduction':True,'project_scope':'full','segment_seconds':10}
+        for tail in (2.9,3.0,8.5):
+            rows=[{'index':0,'start':0,'seconds':10},{'index':1,'start':10,'seconds':tail}]
+            contract=ending_contract(req,10+tail,rows)
+            self.assertEqual(contract['resolve_start_by'],0 if tail<=3 else 10)
+            if tail<=3:
+                self.assertEqual(contract['settle_by'],10)
+                seg=dict(rows[-1],song_seconds=10+tail,segment_count=2,direction_ending_contract=contract)
+                self.assertEqual(clip_ending(req,seg)['phase'],'terminal_hold')
+            else:self.assertEqual(contract['short_tail_seconds'],0)
+            self.assertEqual(ending_contract(req,10+tail)['resolve_start_by'],contract['resolve_start_by'])
+        self.assertGreater(ending_contract(req,2.5)['settle_by'],0)
+
     def test_actual_failure_shape_missing_right_delimiters_and_end_is_readable(self):
         raw=('=== SETUP ===\n<Picture 1> is the singer.\n'
              '=== CLIP 0 action\nA feint causes a defensive reaction.\n'
@@ -35,6 +50,7 @@ class PreproductionTests(unittest.TestCase):
     def test_saved_failed_delivery_can_be_recovered_without_writer_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['camera_review']=False
             req['vnext_preproduction']=True
             raw=fixtures.allocation().replace('=== CLIP 0 story ===','=== CLIP 0 story').replace('=== END ===','')
             path=root/'director_attempt_03.json'
@@ -74,6 +90,7 @@ class PreproductionTests(unittest.TestCase):
     def test_native_director_receives_only_current_commission_and_can_expand_performance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['camera_review']=False
             job={'request':req,'segments':[dict(s,director_plan={'event':f'Event {s["index"]}.'}) for s in timeline()]}
             model=Mock(side_effect=[fixtures.native_prompt(i) for i in range(3)])
             prepare(cfg,job,images,root,model)
@@ -95,6 +112,7 @@ class PreproductionTests(unittest.TestCase):
     def test_original_roles_reach_writer_even_when_generated_setup_is_wrong(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['camera_review']=False
             req['prompt']=('@圖片1：歌手，成年女性，主唱。\n@圖片2：對手，成年男性，衛冕選手。\n'
                            '歌手在舞台演唱；競賽場景專注競技。\n最後對手倒地，故事結束。')
             job={'request':req,'segments':[dict(s,director_plan={'event':'Opening state: The opponent is already down. New progression: He tries to rise.'},
@@ -113,6 +131,7 @@ class PreproductionTests(unittest.TestCase):
     def test_allocation_brief_plans_boundary_energy_without_fixed_transition_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['camera_review']=False
             req['vnext_preproduction']=True
             model=Mock(return_value=fixtures.allocation())
             ensure_shoot_plan(cfg,req,timeline(),images,root,model)
@@ -125,6 +144,7 @@ class PreproductionTests(unittest.TestCase):
     def test_interrupted_native_writing_preserves_completed_drafts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['camera_review']=False
             job={'request':req,'segments':[dict(s,director_plan={'event':f'Event {s["index"]}.'}) for s in timeline()]}
             with self.assertRaises(RuntimeError):
                 prepare(cfg,job,images,root,Mock(side_effect=[fixtures.native_prompt(0),RuntimeError('interrupted')]))
@@ -140,7 +160,7 @@ class PreproductionTests(unittest.TestCase):
         for mode in ('independent','chain'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,ExitStack() as stack:
                 root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root,mode)
-                req.update(vnext_preproduction=True,audio_analysis=False)
+                req.update(camera_review=False,screenplay_review=False,vnext_preproduction=True,audio_analysis=False)
                 work=root/'abcdef123456';work.mkdir()
                 job={'id':work.name,'request':req,'segments':timeline(),'status':'running',
                      'size':[32,32],'images_comfy':['ref0.png','ref1.png'],'seed':42,
@@ -186,7 +206,8 @@ class PreproductionTests(unittest.TestCase):
     def test_review_still_waits_for_original_approve_button(self):
         with tempfile.TemporaryDirectory() as tmp,ExitStack() as stack:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
-            req.update(vnext_preproduction=True,plan_review=True,audio_analysis=False)
+            req['camera_review']=False
+            req.update(camera_review=False,screenplay_review=False,vnext_preproduction=True,plan_review=True,audio_analysis=False)
             work=root/'abcdef123456';work.mkdir()
             job={'id':work.name,'request':req,'segments':timeline(),'status':'running',
                  'size':[32,32],'images_comfy':['ref0.png','ref1.png'],'seed':42,
@@ -205,6 +226,7 @@ class PreproductionTests(unittest.TestCase):
     def test_camera_failure_saves_diagnostics_without_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['camera_review']=False
             job={'request':req,'segments':[dict(s,director_plan={'event':'A quiet scene.'}) for s in timeline()]}
             job['request']['h3_validation_version']=1
             with self.assertRaises(ValueError):prepare(cfg,job,images,root,Mock(return_value='not a native prompt'))

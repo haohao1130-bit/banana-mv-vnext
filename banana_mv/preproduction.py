@@ -7,7 +7,8 @@ import uuid
 from banana_mv.core import normalize_mv_prompt
 from banana_mv.scene_state import atomic_json, parse_object, rewrite_retry_count
 from banana_mv.shoot_plan import _text, _pictures, AUTO_FILMING, DYNAMIC_EDITING, CLIP_INTENSITY, REFERENCE_PERFORMANCE
-from banana_mv.lyrics_reference import excerpt, OUTPUT_POLICY
+from banana_mv.lyrics_reference import excerpt, OUTPUT_POLICY, OPTIONAL_TIMING_POLICY
+from banana_mv.filming_review import SCENE_INSTANCE_POLICY, review_prompt
 from banana_mv.mv_scope import clip_ending
 
 CAMERA_SYSTEM = '''You are the whole-song cinematographer. The supplied screenplay is final.
@@ -158,6 +159,8 @@ def prepare(cfg,job,originals,work,rewrite):
     if ready.is_file():return
     screenplay={'version':5,'shared_setup':job.get('plan_preview_setup',''),
         'clips':[{'index':s['index'],'seconds':s['seconds'],
+                  'source_start':s['start'],'source_end':s['start']+s['seconds'],
+                  'time_basis':'Shot times are clip-local; source_start/end and source SRT times are global.',
                   'event':s['director_plan']['event'],
                   'ending':clip_ending(job['request'],s),
                   'fixed_reference_settings':s.get('fixed_reference_settings',''),
@@ -165,7 +168,7 @@ def prepare(cfg,job,originals,work,rewrite):
                   'audio_evidence':s.get('audio_evidence',{})} for s in job['segments']]}
     atomic_json(folder/'screenplay.json',screenplay)
     guide=Path(cfg['guides']['ref']).read_text(encoding='utf-8')
-    system=NATIVE_DIRECTOR+'\n'+guide
+    system=NATIVE_DIRECTOR+'\n'+guide+'\n'+SCENE_INSTANCE_POLICY+'\n'+OPTIONAL_TIMING_POLICY
     req=job['request']
     style=AUTO_FILMING+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]
     style+='\n'+(DYNAMIC_EDITING if req.get('dynamic_cuts',True) else 'Prefer motivated longer takes.')
@@ -197,6 +200,7 @@ def prepare(cfg,job,originals,work,rewrite):
             except ValueError as error:
                 if attempt==rewrite_retry_count(req):raise
                 parts=[('text',json.dumps(payload,ensure_ascii=False)+'\nCorrect native format or local timing: '+str(error))]+_pictures(originals)
+        text,filming_audit=review_prompt(cfg,req,payload,text,rewrite,originals,folder,seg['index'])
         if req.get('mode')=='chain' and seg['index']>0:
             text=re.sub(r'<Picture (\d+)>',lambda m:f'<Picture {int(m[1])+1}>',text)
             text='subject_definitions:\n<Picture 1> is the actual preceding last frame, a continuity guide rather than another actor.\n'+re.sub(r'^\s*subject_definitions\s*:\s*','',text,count=1)
@@ -215,9 +219,25 @@ def preview(job,work):
     """Enrich a read-only status response, without marking any clip as rendered."""
     folder=Path(work)/'preproduction'
     if not job.get('request',{}).get('vnext_preproduction') or not (folder/'ready.json').is_file():return job
+    warnings=[]
+    global_path=Path(work)/'screenplay_review.json'
+    if global_path.is_file():
+        try:
+            review=json.loads(global_path.read_text(encoding='utf-8'))
+            if review.get('status') not in ('passed','disabled'):
+                warnings.append('全局劇本審稿未通過或未完成：'+review.get('status','unknown'))
+        except (ValueError,OSError):warnings.append('全局審稿紀錄無法讀取；不可視為通過。')
+    for audit_path in folder.glob('*_filming_review.json'):
+        try:
+            review=json.loads(audit_path.read_text(encoding='utf-8'))
+            if review.get('status') not in ('passed','disabled'):
+                warnings.append(audit_path.name.split('_')[0]+' 段攝影審稿：'+review.get('status','unknown'))
+        except (ValueError,OSError):warnings.append('攝影審稿紀錄無法讀取。')
+    job['quality_warnings']=warnings
     for seg in job['segments']:
         path=folder/f'{seg["index"]:02d}_prompt.txt'
         if not seg.get('prompt') and path.is_file():
             seg['prompt']=path.read_text(encoding='utf-8')
             seg['prompt_prepared']=True
     return job
+

@@ -406,6 +406,10 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
             ', '.join(MODES)+f'. Deliver {len(segments)} CLIP blocks.')
     if complete_story:
         system+='\nCOMPLETE STORY SCOPE: Read the ENTIRE user brief before allocation. Budget opening, development, decisive resolution and final image over the ENTIRE available duration. Work backward from the mandatory ending, reserve enough room for it, then fit the middle. Compress optional staging rather than dropping required events or stopping at paragraph N. Musical section labels guide accents only; no outro is required to finish a story. For a very short tail, complete decisive events in the preceding full interval and sustain their result in the tail. If the complete request cannot fit, explicitly report that rather than delivering an incomplete story.'
+    if req.get('vnext_preproduction'):
+        from banana_mv.filming_review import SCENE_INSTANCE_POLICY
+        from banana_mv.lyrics_reference import OPTIONAL_TIMING_POLICY
+        system+='\n'+SCENE_INSTANCE_POLICY+'\n'+OPTIONAL_TIMING_POLICY
     attempts=parts
     # A formatting-only update can recover an existing response without a new 9B call.
     recovered=None
@@ -675,5 +679,6 @@ Return only the native filming prompt, no analysis, JSON or management instructi
             if attempt>=rewrite_retry_count(req):
                 raise SceneStateError('當段拍攝稿交稿失敗：'+str(error)) from error
             attempts=parts+[('text','Return only the current native H3 prompt. Fix H3 native formatting, shot timing or connected media only: '+str(error))]
+
 
 

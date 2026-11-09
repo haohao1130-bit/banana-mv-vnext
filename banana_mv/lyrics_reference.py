@@ -115,3 +115,55 @@ def clean_lyric_output(text,req):
         text=re.sub(r'[\"“「『]\s*'+phrase_pattern+r'\s*[\"”」』]',drop,text)
         text=re.sub(r'^\s*(?:(?:lyrics?|SRT cue)\s*:\s*)?'+phrase_pattern+r'\s*$',drop,text,flags=re.I|re.M)
     return text.strip(),removed
+
+
+
+OPTIONAL_TIMING_POLICY = '''SRT is optional reference, not a storyboard or edit list.
+Without SRT, write and review normally, infer no precise lyric times and report no
+missing-subtitle or missing-coverage issue. With SRT, do not require lyrics,
+singing shots, literal illustrations or cuts at cue boundaries. Events drive
+coverage. Only when a draft explicitly schedules singing, lip sync or lyric text,
+check for a substantial contradiction with supplied timing or words. Source times
+are global; clip_start/clip_end are local seconds within this source window.
+Missing cues are not silence. Preserve reasonable performance and edit flexibility.
+A lyric mentioned as theme, foreshadowing or soundtrack is not a singing event.
+Only repair definite mismatches, preserving valid story, shots and causal states.
+Plain untimed lyrics do not establish an exact time. Original audio stays unchanged.'''
+
+
+def lyric_conflicts(text, local_cues, *, shot_clock=False, seconds=None, all_cues=None):
+    """Conservative evidence checks, not lyric coverage scoring.
+
+    Only explicit tagged/quoted sung text is compared. An untimed line cannot be
+    rejected merely because it is absent from the overlapping excerpt. Unknown
+    words need the full SRT vocabulary. Translations/paraphrases are left to QA.
+    """
+    if all_cues is None:all_cues=local_cues
+    if not all_cues:return []
+    def norm(value):return re.sub(r'[^\w]','',value,flags=re.UNICODE).casefold()
+    chunks=[(0,float(seconds or 1e9),text)]
+    if shot_clock:
+        body=re.search(r'detailed_description\s*:(.*?)(?:overall_soundscape\s*:|$)',text,re.S|re.I)
+        body=body[1] if body else text
+        marks=list(re.finditer(r'\[Shot\s+\d+\]\s*(?:At\s+(\d+):(\d+)\.(\d+))?',body,re.I))
+        def clock(m):return int(m[1])*60+int(m[2])+int(m[3])/1000 if m[1] else 0
+        chunks=[(clock(m),clock(marks[i+1]) if i+1<len(marks) else float(seconds or 1e9),
+                 body[m.end():marks[i+1].start() if i+1<len(marks) else len(body)]) for i,m in enumerate(marks)]
+    issues=[]
+    for start,end,chunk in chunks:
+        phrases=re.findall(r'<d\b[^>]*>(.*?)</d\s*>',chunk,re.S|re.I)
+        # Literal quoted text is only a vocal claim with an explicit performance verb.
+        for sentence in re.split(r'[\n.]',chunk):
+            if re.search(r'\b(?:sings?|singing|lip.syncs?|belts?|performs? the .*line)\b|唱出|演唱|對嘴',sentence,re.I):
+                phrases+=re.findall(r'["“「](.*?)["”」]',sentence)
+        for phrase in phrases:
+            phrase=re.sub(r'\[[^\]]*\]','',phrase).strip();key=norm(phrase)
+            if len(key)<4:continue
+            known=[c for c in all_cues if key in norm(c['text']) or norm(c['text']) in key]
+            if not known:continue  # Avoid calling translations or brief dialogue fake lyrics.
+            overlapping=[c for c in local_cues if key in norm(c['text']) or norm(c['text']) in key]
+            if not overlapping:
+                issues.append({'reason':f'Explicit sung lyric {phrase!r} belongs to another source interval; preserve the scene and remove or retime only this vocal claim.'})
+            elif shot_clock and not any(c['clip_start']<end+0.75 and c['clip_end']>start-0.75 for c in overlapping):
+                issues.append({'reason':f'Explicit sung lyric {phrase!r} in local shot {start:g}–{end:g}s conflicts with supplied local SRT; preserve coverage and correct its vocal timing.'})
+    return issues

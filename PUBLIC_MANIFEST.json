@@ -19,7 +19,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "91ef66772fe861ae0b26127b55ddcb468df9bca07a331236d1ceba60d1e9c735"
+      "sha256": "b217f6dc94c516017658c0f488e49e8188c3cb6c2c5784951ab312015c9a7c98"
     },
     {
       "path": "THIRD_PARTY.md",
@@ -59,7 +59,7 @@
     },
     {
       "path": "banana_mv/lyrics_reference.py",
-      "sha256": "d68747bbef1317a7f7f720d29f129b85215995734b9797babfdac0d6b83e11ce"
+      "sha256": "0fbe038178da16adffa167fdbf65b5a333dc1c4209bc52b70bc57fc73b12447f"
     },
     {
       "path": "banana_mv/masters.py",
@@ -71,7 +71,7 @@
     },
     {
       "path": "banana_mv/mv_scope.py",
-      "sha256": "4443e4870c12fc66959704af647ad221b22e1b5b3f21f3d9019f500d20eb6f27"
+      "sha256": "158b720a06ab6e5254872d235176768efdcd0721fe7d98f034e162b42fe797a0"
     },
     {
       "path": "banana_mv/plan_translation.py",
@@ -79,7 +79,7 @@
     },
     {
       "path": "banana_mv/preproduction.py",
-      "sha256": "2c65286c43c356613a572f6a0a4f996b6efe376a39cacd863e4a98fd58e2b28d"
+      "sha256": "cc29d001fe328f2e8f279c9a2bb73c7423f3913bb5aa42422b6aa23171640844"
     },
     {
       "path": "banana_mv/prompt_quality.py",
@@ -99,7 +99,7 @@
     },
     {
       "path": "banana_mv/shoot_plan.py",
-      "sha256": "993a44a0d12c037a004019f18f91753c79de05dc07a9d4e7beda94f492f4874d"
+      "sha256": "4c867d2546f79c4c88395e7e23b57d9ad331b8e8b2e55fc73138b4a1da48bed6"
     },
     {
       "path": "banana_mv/song_context.py",
@@ -123,7 +123,7 @@
     },
     {
       "path": "banana_mv/web/index.html",
-      "sha256": "81873c8cab68fd1ddd98cf0344c38029261a820d1e8874b105038bc6760a70dd"
+      "sha256": "5f1fa5e1fcce0b300c4079ade3186296178229f57a5a478346a1068335cda6ae"
     },
     {
       "path": "docs/clip_review.md",
@@ -247,7 +247,7 @@
     },
     {
       "path": "tests/test_mv_scope.py",
-      "sha256": "31377559af49f67c7e621ddca37ccf318942e8669cfb3b94e83e825c45830b75"
+      "sha256": "5be9baf8d453b43ae9760dea72977ae3de1870331bdc249ffa1c2fc2b5c9f19b"
     },
     {
       "path": "tests/test_original_supporting_cast.py",
@@ -263,7 +263,7 @@
     },
     {
       "path": "tests/test_preproduction.py",
-      "sha256": "76b456e7691fc7fd483ac0d56f98ef65d25b782f0f00eb95aa022135c84e9761"
+      "sha256": "e6364bd123911dcf594df3a239bc0abb8a414e53f5e1cd49bb75f6f8730081cb"
     },
     {
       "path": "tests/test_prompt_quality.py",
@@ -299,7 +299,7 @@
     },
     {
       "path": "tests/test_shoot_plan.py",
-      "sha256": "ab4e072da951a99df0a1a4ae87c1f9a6ac19a4b69295330e26728868ef905c80"
+      "sha256": "18cfacebd7b48d6b44d19fc956f3b279556bf0d55162111b0e646048b691951b"
     },
     {
       "path": "tests/test_sound_effects.py",
@@ -340,6 +340,30 @@
     {
       "path": "workflows/independent_api.json",
       "sha256": "c0f5cbf49800b9533c040417e53c70e2d68f9ece5ff6482c9b7460e20cd86f7d"
+    },
+    {
+      "path": "banana_mv/review_output.py",
+      "sha256": "ea0567446edeff21d0ddd498552d2f0dbfc1e55ad12b6fbc4757ac0cba7a8bd5"
+    },
+    {
+      "path": "banana_mv/filming_review.py",
+      "sha256": "fe504f05423431f38f9d91e90c02c4b818be3788198b652f1bf08d9fb839fa53"
+    },
+    {
+      "path": "banana_mv/screenplay_review.py",
+      "sha256": "698591daf5327d50a38bdfd70a4934d4fda5c66054e2b687df9fe69c9af8dd62"
+    },
+    {
+      "path": "tests/test_screenplay_review.py",
+      "sha256": "0813f13d6642293758302be51351de1a7e1119bb4191932fc94e9468dcfe1361"
+    },
+    {
+      "path": "tests/test_review_contracts.py",
+      "sha256": "8fa06b4b730e0fa4f926340a440a18c337a48b3545363e33574679f4c67f5c4b"
+    },
+    {
+      "path": "docs/v2_review_implementation.md",
+      "sha256": "8c9c04b858eba39f40b5e6dcd9226cc9aabf727b1dcd6ca87022d1c820cfa8cd"
     }
   ]
 }
