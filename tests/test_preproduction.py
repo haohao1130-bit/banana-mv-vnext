@@ -71,7 +71,7 @@ class PreproductionTests(unittest.TestCase):
             self.assertTrue(all(s['prompt_prepared'] for s in response['segments']))
             self.assertFalse(any(s.get('prompt') for s in job['segments']))
 
-    def test_native_director_receives_full_story_and_can_expand_performance(self):
+    def test_native_director_receives_only_current_commission_and_can_expand_performance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
             job={'request':req,'segments':[dict(s,director_plan={'event':f'Event {s["index"]}.'}) for s in timeline()]}
@@ -82,10 +82,27 @@ class PreproductionTests(unittest.TestCase):
                 self.assertIn('OFFICIAL_NATIVE_GUIDE_MARKER',call.args[1])
                 self.assertIn('Actively invent',call.args[1])
                 payload=json.loads(call.args[2][0][1])
-                self.assertEqual(payload['target_clip_index'],i)
-                self.assertEqual(len(payload['whole_screenplay']['clips']),3)
-                self.assertIn('ending',payload['whole_screenplay']['clips'][i])
+                self.assertEqual(payload['current_clip']['index'],i)
+                self.assertNotIn('whole_screenplay',payload)
+                self.assertNotIn('PRIVATE_FULL_STORY',call.args[2][0][1])
+                self.assertIn('summary describes ONLY this interval',call.args[1])
+                self.assertIn('ending',payload['current_clip'])
+                text=call.args[2][0][1]
+                for other in range(3):
+                    if other!=i:self.assertNotIn(f'Event {other}.',text)
                 self.assertEqual((root/f'preproduction/{i:02d}_prompt.txt').read_text(),fixtures.native_prompt(i))
+
+    def test_allocation_brief_plans_boundary_energy_without_fixed_transition_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['vnext_preproduction']=True
+            model=Mock(return_value=fixtures.allocation())
+            ensure_shoot_plan(cfg,req,timeline(),images,root,model)
+            system=model.call_args.args[1]
+            self.assertIn('Design adjacent boundaries together',system)
+            self.assertIn('need not finish the same physical action',system)
+            self.assertIn('not mandatory',system)
+            self.assertIn('NOT a self-contained miniature story',system)
 
     def test_interrupted_native_writing_preserves_completed_drafts(self):
         with tempfile.TemporaryDirectory() as tmp:

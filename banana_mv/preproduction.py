@@ -105,8 +105,9 @@ def compile_prompt(job, seg, row):
 
 
 NATIVE_DIRECTOR = """You are the screen director and native H3 Ref2VA prompt writer.
-Read the whole commissioned screenplay to understand dramatic progression. Expand
-ONLY the target interval into a complete production-ready filming prompt, using
+Read the isolated current-interval commission: one continuous slice of a longer work,
+not a miniature complete story. Expand
+ONLY this interval into a complete production-ready filming prompt, using
 the official six-section format below. Preserve commissioned identities, vocal
 roles, core events, causal progression and local outcome. Actively invent the
 specific performance, physical choreography, expressions, reactions, blocking,
@@ -117,8 +118,16 @@ close-ups, inserts, wide views, subjective angles and temporal speed changes whe
 they serve the event, rather than cycling a checklist. Show preparation, execution
 and consequence. Temporal effects change visual action only; source music stays
 unchanged. Parallel scenes remain distinct and their action progresses across cuts.
-Use the full-story context for continuity, while filming the assigned interval;
-continuing intervals remain in progress, and the assigned resolution is fully shown.
+The summary describes ONLY this interval's visible progression. Shared settings
+establish identities and places, not an opening sequence or a plot synopsis.
+Use the current state and the commission's incoming/outgoing energy cues to stage
+the first and last shots. Carry momentum by the chosen movement, rhythm, attention,
+composition, emotion or contrast; a new subject or location can receive that energy.
+Complete a readable shot at the boundary without forcing the story to settle.
+Film an opening or resolution only when explicitly assigned in this commission;
+otherwise stay in progress. If assigned a residual ending hold, sustain its present
+result without replaying the decisive event. The commission's actual events remain
+authoritative over generic ending-phase hints.
 SRT and music analysis provide timing context, not mandatory cut points.
 The supplied recording is unchanged: retention_analysis includes <Audio 1>:
 fully_copy. Only assigned vocalists lip-sync the original lyrics at supplied timing.
@@ -137,7 +146,7 @@ def prepare(cfg,job,originals,work,rewrite):
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     ready=folder/'ready.json'
     if ready.is_file():return
-    screenplay={'version':3,'shared_setup':job.get('plan_preview_setup',''),
+    screenplay={'version':4,'shared_setup':job.get('plan_preview_setup',''),
         'clips':[{'index':s['index'],'seconds':s['seconds'],
                   'event':s['director_plan']['event'],
                   'ending':clip_ending(job['request'],s),
@@ -155,7 +164,7 @@ def prepare(cfg,job,originals,work,rewrite):
     for seg in job['segments']:
         path=folder/f'{seg["index"]:02d}_prompt.txt'
         if path.is_file():continue
-        payload={'whole_screenplay':screenplay,'target_clip_index':seg['index'],
+        payload={'current_clip':screenplay['clips'][seg['index']],
                  'duration_seconds':seg['seconds'],'direction':style}
         parts=[('text',json.dumps(payload,ensure_ascii=False))]+_pictures(originals)
         for attempt in range(rewrite_retry_count(req)+1):
@@ -171,7 +180,7 @@ def prepare(cfg,job,originals,work,rewrite):
             text=re.sub(r'<Picture (\d+)>',lambda m:f'<Picture {int(m[1])+1}>',text)
             text='subject_definitions:\n<Picture 1> is the actual preceding last frame, a continuity guide rather than another actor.\n'+re.sub(r'^\s*subject_definitions\s*:\s*','',text,count=1)
         path.write_text(text,encoding='utf-8')
-    atomic_json(ready,{'version':3,'clip_count':len(job['segments'])})
+    atomic_json(ready,{'version':4,'clip_count':len(job['segments'])})
 
 
 def prompt(work,index):

@@ -281,7 +281,7 @@ events, their causal order, vocal roles, reference identities, parallel location
 current appearances and ending. As screenwriter, actively complete a rough story spine into a vivid full screenplay: establish motivation, escalating conflict, physical interactions, emotional reactions, turning points, climax and resolution as appropriate to the genre. Invent connective events and original staging consistent with the brief; preserve all explicit user requirements. Develop it within its adaptation policy;
 retain the user's detailed actions when they are already supplied.
 SETUP contains invariant identity/reference mappings, locations and scene-specific
-singing duties only. Supporting cast without images remains original cast; describe
+singing duties only. SETUP is forwarded to every interval: describe only timeless facts, never prior actions, future actions, a story synopsis or an eventual outcome. Preserve separate locations as separate locations. Derive scene-specific singing duties from the user brief exactly; a singer role does not authorize singing during other activities. Supporting cast without images remains original cast; describe
 their fixed appearance without inventing a Picture. Put plot outcomes ONLY in
 STORY OUTCOME and in the clips where those outcomes actually occur.
 Each CLIP contains chronological event paragraphs, including opening state, action,
@@ -289,6 +289,27 @@ reaction and outgoing state. Keep connected action phases together in one paragr
 Different events or returns to a parallel scene get separate paragraphs. Do not turn
 the script into camera instructions; retain explicit user camera requirements with
 their event. Use current states rather than retelling earlier completed events.
+Each CLIP is a continuous slice of ONE work, with enough present-state information
+to film it; it is NOT a self-contained miniature story. Only the commissioned
+opening introduces the work; only the assigned resolution performs the ending.
+A residual tail sustains the achieved result rather than replaying the resolution.
+State the current situation, this interval's actions and reactions, and outgoing
+physical/emotional state. Exclude recaps and previews of other intervals.
+Design adjacent boundaries together before delivering the complete allocation.
+Choose a motivated last shot and next first shot that carry audience momentum
+through the technical boundary. Continuity may come from movement, direction,
+rhythm, attention, composition, emotion, or deliberate contrast. Choose naturally
+from the story, not from a fixed recipe. The next view may switch subjects or
+locations; it need not finish the same physical action. Returning to a strand
+advances its current situation rather than resetting it.
+Within each CLIP, briefly express its own incoming visual/energy cue and outgoing
+visual/energy cue as local filming directions. Describe only what THIS clip shows
+or carries at its boundary, not another clip's story. These cues are not mandatory
+headers, fixed shot counts or additional events. Keep them outside shared SETUP.
+A shot may end at the boundary while dramatic momentum remains active; do not
+force a pause, farewell, victory pose or fade at every interval end.
+Include only this interval's source lyrics if quoting lyrics at all; supplied SRT
+already provides timing.
 Use the supplied ending context to budget preparation, decisive action, visible
 consequence and final reaction. Intermediate clips continue; the whole-work final
 stop is not a shared instruction or an ending for every clip.
