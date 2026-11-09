@@ -462,11 +462,11 @@ def _check_replayed_shots(shots):
     trigger a retry. This is not a semantic story verifier.
     """
     from collections import defaultdict
-    action=re.compile(r'\\b(?:punch|jab|hook|uppercut|feint|slip|strike|hit|land|knock|stumble|fall|counter|duck|reel)(?:s|ed|ing)?\\b',re.I)
+    action=re.compile(r'\b(?:punch|jab|hook|uppercut|feint|slip|strike|hit|land|knock|stumble|fall|counter|duck|reel)(?:s|ed|ing)?\b',re.I)
     endings=0
     seen=defaultdict(set)
     for index,description in enumerate(shots):
-        if re.search(r'\\bhard[ -]stop\\b',description,re.I):
+        if re.search(r'\bhard[ -]stop\b',description,re.I):
             endings+=1
             if endings>1:
                 raise ValueError('最終音樂 HARD STOP 在不同鏡頭重複執行；請只保留一次結尾。')
