@@ -483,6 +483,23 @@ def _check_replayed_shots(shots):
             seen[key].add(index)
 
 
+def native_shot_replay_warning(prompt):
+    """Return a soft warning; never invalidate an otherwise renderable prompt."""
+    match=re.search(r'^\\s*detailed_description\\s*:(.*?)^\\s*overall_soundscape\\s*:',prompt,re.M|re.S)
+    if not match:
+        return None
+    body=match.group(1)
+    shots=list(re.finditer(r'\\[Shot\\s+\\d+\\]',body))
+    descriptions=[re.sub(r'^\\s*At\\s+\\d{2}:\\d{2}\\.\\d{3}\\s*,?', '',
+        body[shot.end():(shots[i+1].start() if i+1<len(shots) else len(body))])
+        for i,shot in enumerate(shots)]
+    try:
+        _check_replayed_shots(descriptions)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
 def validate_native_mv_format(prompt, seconds, *, require_native=False):
     """Check official Ref2VA shot timing and explicit speaker bindings, not story semantics.
 
@@ -525,7 +542,6 @@ def validate_native_mv_format(prompt, seconds, *, require_native=False):
             description=description[timecode.end():]
         if not description.strip():
             raise ValueError(f'第 {i+1} 鏡缺少畫面描述。')
-    _check_replayed_shots([re.sub(r'^\\s*At\\s+\\d{2}:\\d{2}\\.\\d{3}\\s*,?', '', body[shot.end():(shots[i+1].start() if i+1<len(shots) else len(body))]) for i,shot in enumerate(shots)])
     # H3 (S1)/(S2) represent global voices, including copied source-song voices.
     # Do not require <d> or ban speaker markers: this is source-audio reuse.
     speaker_to_subject={}
