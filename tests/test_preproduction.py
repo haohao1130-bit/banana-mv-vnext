@@ -92,6 +92,24 @@ class PreproductionTests(unittest.TestCase):
                     if other!=i:self.assertNotIn(f'Event {other}.',text)
                 self.assertEqual((root/f'preproduction/{i:02d}_prompt.txt').read_text(),fixtures.native_prompt(i))
 
+    def test_original_roles_reach_writer_even_when_generated_setup_is_wrong(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['prompt']=('@圖片1：歌手，成年女性，主唱。\n@圖片2：對手，成年男性，衛冕選手。\n'
+                           '歌手在舞台演唱；競賽場景專注競技。\n最後對手倒地，故事結束。')
+            job={'request':req,'segments':[dict(s,director_plan={'event':'Opening state: The opponent is already down. New progression: He tries to rise.'},
+                fixed_reference_settings='Both characters sing everywhere.') for s in timeline()]}
+            model=Mock(side_effect=[fixtures.native_prompt(i) for i in range(3)])
+            prepare(cfg,job,images,root,model)
+            for call in model.call_args_list:
+                payload=json.loads(call.args[2][0][1]);source=payload['user_role_declarations']
+                self.assertIn('<Picture 1>：歌手',source)
+                self.assertIn('<Picture 2>：對手',source)
+                self.assertIn('競賽場景專注競技',source)
+                self.assertNotIn('最後對手倒地',source)
+                self.assertIn('override',call.args[1])
+                self.assertIn('already established at frame zero',call.args[1])
+
     def test_allocation_brief_plans_boundary_energy_without_fixed_transition_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)

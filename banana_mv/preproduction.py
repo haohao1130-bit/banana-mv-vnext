@@ -118,6 +118,16 @@ close-ups, inserts, wide views, subjective angles and temporal speed changes whe
 they serve the event, rather than cycling a checklist. Show preparation, execution
 and consequence. Temporal effects change visual action only; source music stays
 unchanged. Parallel scenes remain distinct and their action progresses across cuts.
+User_role_declarations quote the user's explicit source instructions. They override
+conflicting generated fixed settings or events. Preserve who performs which role
+in which location; an unassigned co-star is not another vocalist. Keep stable
+Subject/voice bindings across the project; picture order does not imply a voice.
+Opening state is already established at frame zero, not a scene to reconstruct.
+Film only New progression, ending in Outgoing state. Across shots advance from the
+state already reached: do not describe the complete action in Shot 1 and replay
+its preparation, contact or consequence in subsequent shots. Cover each action
+phase at its actual chronological position. New angles may show ongoing action
+or fresh reactions, not restart a completed milestone.
 The summary describes ONLY this interval's visible progression. Shared settings
 establish identities and places, not an opening sequence or a plot synopsis.
 Use the current state and the commission's incoming/outgoing energy cues to stage
@@ -142,11 +152,11 @@ lyrics and visible text in their original language. Use clip-local cut times.
 
 def prepare(cfg,job,originals,work,rewrite):
     """Complete every native director prompt before the existing render loop."""
-    from banana_mv.shoot_plan import validate_native_mv_format
+    from banana_mv.shoot_plan import validate_native_mv_format, source_role_settings
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     ready=folder/'ready.json'
     if ready.is_file():return
-    screenplay={'version':4,'shared_setup':job.get('plan_preview_setup',''),
+    screenplay={'version':5,'shared_setup':job.get('plan_preview_setup',''),
         'clips':[{'index':s['index'],'seconds':s['seconds'],
                   'event':s['director_plan']['event'],
                   'ending':clip_ending(job['request'],s),
@@ -164,7 +174,8 @@ def prepare(cfg,job,originals,work,rewrite):
     for seg in job['segments']:
         path=folder/f'{seg["index"]:02d}_prompt.txt'
         if path.is_file():continue
-        payload={'current_clip':screenplay['clips'][seg['index']],
+        payload={'user_role_declarations':source_role_settings(req.get('prompt',''),len(originals)),
+                 'current_clip':screenplay['clips'][seg['index']],
                  'duration_seconds':seg['seconds'],'direction':style}
         parts=[('text',json.dumps(payload,ensure_ascii=False))]+_pictures(originals)
         for attempt in range(rewrite_retry_count(req)+1):
@@ -180,7 +191,7 @@ def prepare(cfg,job,originals,work,rewrite):
             text=re.sub(r'<Picture (\d+)>',lambda m:f'<Picture {int(m[1])+1}>',text)
             text='subject_definitions:\n<Picture 1> is the actual preceding last frame, a continuity guide rather than another actor.\n'+re.sub(r'^\s*subject_definitions\s*:\s*','',text,count=1)
         path.write_text(text,encoding='utf-8')
-    atomic_json(ready,{'version':4,'clip_count':len(job['segments'])})
+    atomic_json(ready,{'version':5,'clip_count':len(job['segments'])})
 
 
 def prompt(work,index):

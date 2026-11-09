@@ -275,11 +275,39 @@ def allocation_delivery(raw, expected_count, *, flexible=False):
     return shared,{'segments':rows}
 
 
+def source_role_settings(brief, image_count):
+    """Conservatively retain explicit reference declarations and vocal-role clauses.
+
+    This is source text, not inferred cast or a new validation gate. Temporal plot
+    clauses stay in the upstream brief; never forward the complete story here.
+    """
+    text=map_image_mentions(brief,image_count)
+    kept=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line:continue
+        if re.match(r'^<Picture \d+>\s*[:：]',line):
+            # Reference declarations are retained only up to sentence boundaries.
+            clauses=re.split(r'(?<=[。.!?！？])\s*',line)
+        else:
+            clauses=re.split(r'(?<=[。.!?！？])\s*',line)
+        for clause in clauses:
+            if not clause:continue
+            temporal=re.search(r'最後|結尾|結局|隨後|之後|接著|最終|倒地|擊倒|\b(?:finally|then|afterward|ending|knockdown)\b',clause,re.I)
+            reference=re.match(r'^<Picture \d+>\s*[:：]',clause)
+            vocal=re.search(r'主唱|對嘴|演唱|不唱|不會唱|不負責唱|\b(?:vocalist|lead singer|lip.sync|does not sing|never sings)\b',clause,re.I)
+            if (reference or vocal) and not temporal:kept.append(clause)
+    return '\n'.join(dict.fromkeys(kept))
+
+
 VNEXT_ALLOCATION_SYSTEM = '''Prepare the COMPLETE music-video screenplay across the supplied timeline.
 Return the requested delivery directly, without analysis. Preserve user-required
 events, their causal order, vocal roles, reference identities, parallel locations,
 current appearances and ending. As screenwriter, actively complete a rough story spine into a vivid full screenplay: establish motivation, escalating conflict, physical interactions, emotional reactions, turning points, climax and resolution as appropriate to the genre. Invent connective events and original staging consistent with the brief; preserve all explicit user requirements. Develop it within its adaptation policy;
 retain the user's detailed actions when they are already supplied.
+User_role_declarations are verbatim source instructions, authoritative over invented
+staging. Carry their role and location scope faithfully into SETUP; a co-star is
+not a vocalist unless assigned. Use one stable cast/voice mapping throughout.
 SETUP contains invariant identity/reference mappings, locations and scene-specific
 singing duties only. SETUP is forwarded to every interval: describe only timeless facts, never prior actions, future actions, a story synopsis or an eventual outcome. Preserve separate locations as separate locations. Derive scene-specific singing duties from the user brief exactly; a singer role does not authorize singing during other activities. Supporting cast without images remains original cast; describe
 their fixed appearance without inventing a Picture. Put plot outcomes ONLY in
@@ -293,8 +321,15 @@ Each CLIP is a continuous slice of ONE work, with enough present-state informati
 to film it; it is NOT a self-contained miniature story. Only the commissioned
 opening introduces the work; only the assigned resolution performs the ending.
 A residual tail sustains the achieved result rather than replaying the resolution.
-State the current situation, this interval's actions and reactions, and outgoing
-physical/emotional state. Exclude recaps and previews of other intervals.
+Separate each commission in natural prose using Opening state:, New progression:,
+and Outgoing state:. These labels describe different meanings, not three acts.
+Opening state is already true when the interval starts; it is not an action to
+reenact. Assign a one-time milestone to one interval only. Following intervals
+inherit its achieved condition and develop consequences, not repeat its cause.
+If a character is already on the ground, continue from that position rather than
+standing them up to stage another defeat. Apply this principle to every genre.
+Exclude recaps and previews of other intervals. Missing labels do not invalidate
+an otherwise readable commission.
 Design adjacent boundaries together before delivering the complete allocation.
 Choose a motivated last shot and next first shot that carry audience momentum
 through the technical boundary. Continuity may come from movement, direction,
@@ -338,11 +373,13 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
             'ending':clip_ending(req,dict(seg,direction_ending_contract=contract))})
     task={'format':'isolated_shoot_briefs_v3',
           'brief':map_image_mentions(req.get('prompt',''),len(originals)),
+          'user_role_declarations':source_role_settings(req.get('prompt',''),len(originals)),
           'adaptation':'FREE' if req.get('story_plan',True) else 'FAITHFUL',
           'style':req.get('director','auto'),'lyrics':req.get('lyrics',''),
           'intensity':req.get('intensity','high'),'dynamic_cuts':req.get('dynamic_cuts',True),
           'timeline':timeline,
           'ending_contract':contract}
+    if not req.get('vnext_preproduction'):task.pop('user_role_declarations',None)
     complete_story=req.get('project_scope','full')=='full'
     fingerprint=digest(task)
     # Old schema-5 jobs did not fingerprint the two directing controls.
