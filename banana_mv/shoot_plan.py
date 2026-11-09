@@ -454,6 +454,35 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
                             'Do not copy a complete event sequence into later slots. No analysis. Delivery error: '+str(error))]
 
 
+def _check_replayed_shots(shots):
+    """Reject unmistakable replay of a completed action across native shots.
+
+    Conservative by design: repeated actors, locations, lyrics and camera language
+    are normal; only long identical action phrases or repeated final audio stops
+    trigger a retry. This is not a semantic story verifier.
+    """
+    from collections import defaultdict
+    action=re.compile(r'\\b(?:punch|jab|hook|uppercut|feint|slip|strike|hit|land|knock|stumble|fall|counter|duck|reel)(?:s|ed|ing)?\\b',re.I)
+    endings=0
+    seen=defaultdict(set)
+    for index,description in enumerate(shots):
+        if re.search(r'\\bhard[ -]stop\\b',description,re.I):
+            endings+=1
+            if endings>1:
+                raise ValueError('最終音樂 HARD STOP 在不同鏡頭重複執行；請只保留一次結尾。')
+        # Compare uninterrupted original wording; camera/identity recaps alone
+        # cannot trigger the event replay gate.
+        words=re.findall(r"[a-z]+(?:'[a-z]+)?",description.lower())
+        for start in range(max(0,len(words)-15)):
+            chunk=words[start:start+16]
+            if len(chunk)<16 or not action.search(' '.join(chunk)):
+                continue
+            key=tuple(chunk)
+            if seen[key] and index not in seen[key]:
+                raise ValueError(f'分鏡 {index+1} 重演前面鏡頭已完成的攻防動作；保留新反應或後續進展，不要再次演同一動作。')
+            seen[key].add(index)
+
+
 def validate_native_mv_format(prompt, seconds, *, require_native=False):
     """Check official Ref2VA shot timing and explicit speaker bindings, not story semantics.
 
@@ -496,6 +525,7 @@ def validate_native_mv_format(prompt, seconds, *, require_native=False):
             description=description[timecode.end():]
         if not description.strip():
             raise ValueError(f'第 {i+1} 鏡缺少畫面描述。')
+    _check_replayed_shots([re.sub(r'^\\s*At\\s+\\d{2}:\\d{2}\\.\\d{3}\\s*,?', '', body[shot.end():(shots[i+1].start() if i+1<len(shots) else len(body))]) for i,shot in enumerate(shots)])
     # H3 (S1)/(S2) represent global voices, including copied source-song voices.
     # Do not require <d> or ban speaker markers: this is source-audio reuse.
     speaker_to_subject={}
