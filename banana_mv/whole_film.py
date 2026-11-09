@@ -48,7 +48,29 @@ clip commissions. Only the actual whole-film conclusion resolves the story.
 Source recording stays unchanged. Only assigned singers lip-sync; never invent
 lyrics, audio events or instruments you have not heard. State vocal duties by scene.
 SRT is optional timing reference, not mandatory singing coverage or cut positions.
-Use concise English prose; retain source lyrics and names in their language.
+USER TIMING AND DELIVERABLE:
+Treat explicit time ranges in the original brief as commissioned story windows,
+not loose inspiration. Keep the assigned event in its supplied window. Generic
+ending/hold suggestions yield to explicit user timing and final-shot requests.
+Plan the full duration before drafting. Fill it with developed events, not an
+accelerated outline followed by a long aftermath. Preserve creative freedom
+inside the user's constraints; do not change the premise or outcome.
+Deliver an executable shot timeline rather than milestone summaries. Each actual
+change of scene or camera view gets its own beat and shot_id; a camera field
+specifies ONE current view. For montage write its constituent timed shots, not
+"intercut", "rapid cuts" or multiple viewpoints as a substitute for a shot list.
+Choose density from the event; no fixed shot count or cut-every-N-seconds rule.
+Action identifies who does what to whom, the visible movement/direction and
+result. Give important interactions their preparation, contact and consequence
+at their correct times; vary framing and speed according to what must be seen.
+A state contains only the established current condition; it does not perform
+this beat's action, recount previous causes or announce later plot outcomes.
+For one identity in multiple scenes, explicitly bind its duty in each scene.
+Bind referenced actors to actual supplied <Picture N> slots and do not give
+background characters vocal duties that conflict with the user's assigned cast.
+Use English for camera, action, state and role prose; retain source lyrics and
+names in their language. Do not translate the complete filming script to match
+the user's input language.
 '''
 
 
@@ -108,7 +130,7 @@ def compile_window(film, seg, *, chain=False):
         if row['shot_id']!=previous:
             shot+=1;prefix=f'[Shot {shot}] '+(f'At {clock}, ' if shot>1 else '')
         else:prefix=f'At local {clock}, within the same continuous shot, '
-        lines.append(prefix+row['camera']+' Current visible state: '+row['state']+' '+row['action'])
+        lines.append(prefix+row['camera']+' Current visible state: '+row['state']+' New visible action: '+row['action'])
         previous=row['shot_id']
     definitions=film['subject_definitions']
     if chain and seg['index']>0:
@@ -173,6 +195,26 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
                 parts=[('text',json.dumps(source,ensure_ascii=False)+'\nPrevious delivery was unreadable: '+str(exc)+'. Return the complete continuous timeline JSON.')]+_pictures(originals)
         atomic_json(path,{'version':1,'input_sha256':fingerprint,'film':film,
                           'quality_status':'not_visually_verified'})
+    # Master review sees the whole song BEFORE any deterministic slicing.
+    from banana_mv.whole_film_review import review_film
+    from banana_mv.review_output import content_hash
+    review_path=Path(work)/'screenplay_review.json'
+    prior_review={}
+    if review_path.is_file():
+        try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
+        except (ValueError,OSError):pass
+    if (prior_review.get('version')==1 and prior_review.get('scope')=='whole_film'
+            and prior_review.get('output_hash')==content_hash(film)
+            and (prior_review.get('status')!='disabled' or not req.get('screenplay_review',True))):
+        audit=prior_review
+    else:
+        before=copy.deepcopy(film)
+        film,audit=review_film(cfg,req,source,film,rewrite,originals,work,parse_film)
+        if film!=before:
+            atomic_json(folder/('whole_film_before_review_'+uuid.uuid4().hex[:8]+'.json'),before)
+            atomic_json(path,{'version':1,'input_sha256':fingerprint,'film':film,
+                             'quality_status':audit['status']})
+        atomic_json(review_path,audit)
     rows=[]
     from banana_mv.shoot_plan import validate_native_mv_format
     for seg in segments:
@@ -185,9 +227,8 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         rows.append({'index':seg['index'],'mode':mode,'handoff_version':1,
                      'event':'\n'.join(r['state']+' '+r['action'] for r in local)})
     plan={'version':5,'shared_setup':film['subject_definitions'],'segments':rows,
-          'ending_contract':source['ending'],'whole_film_version':1,'visual_verified':False}
+          'ending_contract':source['ending'],'whole_film_version':1,'visual_verified':False,
+          'quality_status':audit['status'],'quality_warnings':audit.get('warnings',[])}
     atomic_json(Path(work)/'director_plan.json',plan)
-    atomic_json(Path(work)/'screenplay_review.json',{'status':'not_run_whole_film',
-        'warnings':['Continuous-film generation is experimental; legacy clip rewrite reviews were not applied.']})
     atomic_json(folder/'whole_film_windows.json',{'version':6,'clip_count':len(segments),'whole_film_version':1})
     return plan

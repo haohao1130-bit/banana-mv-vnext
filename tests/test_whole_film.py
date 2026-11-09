@@ -46,7 +46,7 @@ class WholeFilmTests(unittest.TestCase):
 
     def test_saved_structured_identity_delivery_recovers_without_model_call(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root);req['screenplay_review']=False
             folder=root/'preproduction';folder.mkdir()
             broken=folder/'whole_film_raw_broken.txt';broken.write_text('{"beats":[')
             original=film();definitions=[{'subject_id':'S1','name':'Lead','role':'only singer'}]
@@ -63,7 +63,7 @@ class WholeFilmTests(unittest.TestCase):
 
     def test_truncated_saved_output_is_not_closed_or_accepted_as_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root);req['screenplay_review']=False
             folder=root/'preproduction';folder.mkdir()
             saved=folder/'whole_film_raw_truncated.txt';saved.write_text(json.dumps(film())[:-20])
             writer=Mock(return_value=json.dumps(film()))
@@ -96,7 +96,7 @@ class WholeFilmTests(unittest.TestCase):
 
     def test_one_writer_call_saves_all_windows_and_resume_uses_saved_film(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root);req['screenplay_review']=False
             req.update(whole_film_version=1,vnext_preproduction=True)
             before=copy.deepcopy(cfg);writer=Mock(return_value=json.dumps(film()))
             result=ensure_plan(cfg,req,timeline(),images,root,writer)
@@ -117,7 +117,7 @@ class WholeFilmTests(unittest.TestCase):
 
     def test_delivery_retry_is_bounded_and_raw_output_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root);req['screenplay_review']=False
             req['rewrite_retries']=1
             writer=Mock(side_effect=['{"beats":',json.dumps(film())])
             ensure_film(cfg,req,timeline(),images,root,writer)
@@ -136,7 +136,7 @@ class WholeFilmTests(unittest.TestCase):
 
     def test_no_srt_is_a_normal_upstream_request(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root);req.pop('srt_cues')
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root);req['screenplay_review']=False;req.pop('srt_cues')
             writer=Mock(return_value=json.dumps(film()))
             ensure_film(cfg,req,timeline(),images,root,writer)
             self.assertEqual(json.loads(writer.call_args.args[2][0][1])['srt_cues'],[])
@@ -144,7 +144,7 @@ class WholeFilmTests(unittest.TestCase):
     def test_worker_compiles_entire_film_before_queue_and_resumes_without_writer(self):
         for mode in ('independent','chain'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,ExitStack() as stack:
-                root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root,mode)
+                root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root,mode);req['screenplay_review']=False
                 req.update(camera_review=False,screenplay_review=False,vnext_preproduction=True,whole_film_version=1,audio_analysis=False)
                 work=root/'abcdef123456';work.mkdir()
                 job={'id':work.name,'request':req,'segments':timeline(),'status':'running',
