@@ -18,7 +18,8 @@ MOTION_LORAS = {'combat': 'H3_Combat_V2.safetensors', 'repair': 'Motion_Repair.s
 
 
 def command(args):
-    result = subprocess.run([str(a) for a in args], capture_output=True, text=True)
+    result = subprocess.run([str(a) for a in args], capture_output=True, text=True,
+                            encoding='utf-8', errors='replace')
     if result.returncode:
         raise RuntimeError(result.stderr[-2500:] or f'Command failed: {args[0]}')
     return result.stdout
