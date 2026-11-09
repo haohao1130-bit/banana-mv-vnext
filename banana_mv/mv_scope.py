@@ -2,6 +2,9 @@
 import math
 
 
+SHORT_ENDING_TAIL_SECONDS = 3.0
+
+
 def validate_scope(value):
     if value not in ('full', 'excerpt'):
         raise ValueError('作品範圍必須是 full（本次音檔演完完整故事）或 excerpt（故事片段、保留後續）。')
@@ -15,23 +18,27 @@ def ending_contract(req, total, segments=None):
                 'instruction':'This is an excerpt of a larger MV, not the complete work. Continue the supplied story and performance. End on a clean, editable ongoing beat; do not manufacture a full-work finale, farewell, final victory, fade-out or show-ending pose. An allocated local event may still reach its own outcome.'}
     # Source duration never grows. Resolution starts before a tiny padded tail;
     # settling is measured in visible source time, never model alignment padding.
-    # Reserve at least the last normal interval. A tiny residual tail is a
-    # continuation of the preceding interval's ending, never the entire ending.
+    # At most three residual seconds continue the established ending; the
+    # preceding interval must finish the decisive action before the tail starts.
     if segments:
         nominal=max(row['seconds'] for row in segments)
         tail=segments[-1]['seconds']
-        window=tail+(segments[-2]['seconds'] if len(segments)>1 and tail<nominal*.5 else 0)
+        short_tail=len(segments)>1 and tail<nominal and tail<=SHORT_ENDING_TAIL_SECONDS
+        window=tail+(segments[-2]['seconds'] if short_tail else 0)
     else:
         nominal=float(req.get('segment_seconds',15))
         tail=total%nominal
         if tail<1e-6:tail=min(total,nominal)
-        window=tail+(nominal if tail<nominal*.5 and total>nominal else 0)
+        short_tail=total>nominal and tail<=SHORT_ENDING_TAIL_SECONDS
+        window=tail+(nominal if short_tail else 0)
     window=min(total,window)
     hold = min(1.5, total * .2)
+    settle_by=min(total-hold,total-tail) if short_tail else total-hold
     scope_instruction = ('This uploaded audio is the complete available duration for the entire requested story, even when cropped from a longer song or ending during a verse/chorus. Allocate the complete beginning, development, resolution and specified final image within it. Read the entire story before budgeting time; compress optional middle staging rather than stopping before the ending. Preserve causal progression and all mandatory milestones and the specified outcome.' if req.get('story_scope_version',req.get('story_completion_version'))==1 else 'This is the complete MV. Preserve the outline, causal progression and specified outcome.')
     return {'project_scope':scope, 'finish_work':True,
             'resolve_start_by':round(total-window,6),
-            'settle_by':round(total-hold,6), 'end_time':total,
+            'settle_by':round(settle_by,6), 'end_time':total,
+            'short_tail_seconds':round(tail,6) if short_tail else 0,
             'hold_seconds':hold,
             'instruction':scope_instruction+' Begin resolution by resolve_start_by, finish required action by settle_by, then sustain the terminal image through end_time. A short last interval completes an ending already underway; it must not introduce a new unresolved action or a last-second scene switch. Do not extend, replace or fade the source song.'}
 
@@ -75,6 +82,8 @@ def clip_ending(req, segment):
         # Do not leak future ending action or demand closure in an early clip.
         return {'project_scope':'full','finish_work':False,'phase':'continuing',
                 'instruction':'Continue only this allocated event. The complete-work ending is reserved for later intervals; do not stage it now.'}
+    if contract.get('short_tail_seconds') and contract['is_last_source_interval']:
+        contract['phase']='terminal_hold'
     if closing:
         contract['resolution']=closing['resolution']
         due=closing['resolved_by']
