@@ -56,7 +56,9 @@ class ScopeTests(unittest.TestCase):
         for tail, expected in ((2, True), (3, True), (3.01, False), (4, False)):
             total = 70 + tail
             clips = segments(total, 10)
-            contract = ending_contract({'project_scope':'full'}, total, clips)
+            # Runtime uses the frame-aligned timeline end, not raw audio seconds.
+            aligned_total = clips[-1]['start'] + clips[-1]['seconds']
+            contract = ending_contract({'project_scope':'full'}, aligned_total, clips)
             with self.subTest(tail=tail):
                 self.assertEqual(bool(contract['short_tail_seconds']), expected)
                 last_start = clips[-1]['start']
@@ -66,7 +68,7 @@ class ScopeTests(unittest.TestCase):
                     self.assertAlmostEqual(contract['settle_by'], last_start, places=5)
                     last = clip_ending({'project_scope':'full'},
                                        dict(clips[-1],segment_count=len(clips),
-                                            song_seconds=total,direction_ending_contract=contract))
+                                            song_seconds=aligned_total,direction_ending_contract=contract))
                     self.assertEqual(last['phase'], 'terminal_hold')
                     self.assertEqual(last['local_settle_by'], 0)
                 else:
