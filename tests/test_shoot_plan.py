@@ -374,23 +374,23 @@ class ShootPlanTests(unittest.TestCase):
     def test_native_shot_replay_is_rejected_but_reactions_are_allowed(self):
         from banana_mv.shoot_plan import validate_native_mv_format
         def native(body):
-            return ('subject_definitions:\\n<Subject 1> is the fighter from <Picture 1>.\\n\\n'
-                    'summary:\\nA continuing fight.\\n\\n'
-                    'retention_analysis:\\n<Audio 1>: fully_copy.\\n\\n'
-                    'detailed_description:\\n'+body+'\\n\\n'
-                    'overall_soundscape:\\n<Audio 1>: fully_copy.\\n\\n'
-                    'non_diegetic_music:\\nUse only <Audio 1>.')
+            return ('subject_definitions:\n<Subject 1> is the fighter from <Picture 1>.\n\n'
+                    'summary:\nA continuing fight.\n\n'
+                    'retention_analysis:\n<Audio 1>: fully_copy.\n\n'
+                    'detailed_description:\n'+body+'\n\n'
+                    'overall_soundscape:\n<Audio 1>: fully_copy.\n\n'
+                    'non_diegetic_music:\nUse only <Audio 1>.')
         strike=('The fighter steps inside and lands a hard right uppercut '
                 'that knocks the champion backward against the ropes.')
-        repeated=native('[Shot 1] '+strike+'\\n[Shot 2] At 00:05.000, '+strike)
+        repeated=native('[Shot 1] '+strike+'\n[Shot 2] At 00:05.000, '+strike)
         with self.assertRaisesRegex(ValueError,'重演'):
             validate_native_mv_format(repeated,15)
         continuation=native('[Shot 1] '+strike+
-            '\\n[Shot 2] At 00:05.000, The champion braces against the ropes, '
+            '\n[Shot 2] At 00:05.000, The champion braces against the ropes, '
             'blinks, and steadies his footing while the fighter backs away.')
         self.assertEqual(validate_native_mv_format(continuation,15),continuation)
         replayed_stop=native('[Shot 1] The singer ends the song on a HARD STOP.'
-            '\\n[Shot 2] At 00:05.000, The singer repeats the line on another HARD STOP.')
+            '\n[Shot 2] At 00:05.000, The singer repeats the line on another HARD STOP.')
         with self.assertRaisesRegex(ValueError,'HARD STOP'):
             validate_native_mv_format(replayed_stop,15)
 
