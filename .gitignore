@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+projects/
+*.wav
+*.mp4
+*.png
+*.jpg
