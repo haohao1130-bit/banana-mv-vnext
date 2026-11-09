@@ -242,6 +242,71 @@ def _check_distinct_events(rows):
         seen[key]=row['index']
 
 
+def allocation_delivery(raw, expected_count, *, flexible=False):
+    """Read model-authored boundaries; VNext doesn't require cosmetic closing ===.
+
+    Preserve all event prose. No story repair or generated filler is performed.
+    The existing caller still pairs returned rows with the source intervals.
+    """
+    from banana_mv.story_plan import direct_delivery
+    text=_text(raw)
+    if not flexible:
+        setup=re.match(r'^===\s*SETUP\s*===\s*\n(.*?)(?=^===\s*(?:STORY OUTCOME\s*===|CLIP\s))',text,re.S|re.M)
+        if not setup:raise SceneStateError('分段大綱缺少 SETUP 共用設定。')
+        return setup[1].strip(),direct_delivery(text)
+    # Real 9B outputs may omit the right delimiter or the standalone END line.
+    # Neither spelling changes an explicitly numbered clip's content.
+    header=re.compile(r'^\s*===\s*CLIP\s+(\d+)\s+([a-z]+)\s*(?:===)?\s*$',re.M|re.I)
+    markers=list(header.finditer(text))
+    setup_header=re.search(r'^\s*===\s*SETUP\s*(?:===)?\s*$',text,re.M|re.I)
+    if not setup_header or not markers:
+        raise SceneStateError('回覆尚未提供可讀的共用設定與分段內容；原文已保存。')
+    setup_end=markers[0].start()
+    outcome=re.search(r'^\s*===\s*STORY OUTCOME\s*(?:===)?\s*$',text,re.M|re.I)
+    if outcome and setup_header.end()<outcome.start()<setup_end:setup_end=outcome.start()
+    shared=text[setup_header.end():setup_end].strip()
+    end=re.search(r'^\s*===\s*END\s*(?:===)?\s*$',text,re.M|re.I)
+    rows=[]
+    for i,marker in enumerate(markers):
+        stop=markers[i+1].start() if i+1<len(markers) else (end.start() if end and end.start()>marker.end() else len(text))
+        rows.append({'index':int(marker[1]),'mode':marker[2].lower(),'prompt':text[marker.end():stop].strip()})
+    if len(rows)!=expected_count or not shared or any(not r['prompt'] for r in rows):
+        raise SceneStateError(f'目前回覆未提供 {expected_count} 段可讀內容；原文已保存。')
+    return shared,{'segments':rows}
+
+
+VNEXT_ALLOCATION_SYSTEM = '''Prepare the COMPLETE music-video screenplay across the supplied timeline.
+Return the requested delivery directly, without analysis. Preserve user-required
+events, their causal order, vocal roles, reference identities, parallel locations,
+current appearances and ending. Develop a rough brief within its adaptation policy;
+retain the user's detailed actions when they are already supplied.
+SETUP contains invariant identity/reference mappings, locations and scene-specific
+singing duties only. Supporting cast without images remains original cast; describe
+their fixed appearance without inventing a Picture. Put plot outcomes ONLY in
+STORY OUTCOME and in the clips where those outcomes actually occur.
+Each CLIP contains chronological event paragraphs, including opening state, action,
+reaction and outgoing state. Keep connected action phases together in one paragraph.
+Different events or returns to a parallel scene get separate paragraphs. Do not turn
+the script into camera instructions; retain explicit user camera requirements with
+their event. Use current states rather than retelling earlier completed events.
+Use the supplied ending context to budget preparation, decisive action, visible
+consequence and final reaction. Intermediate clips continue; the whole-work final
+stop is not a shared instruction or an ending for every clip.
+SRT and music evidence are fallible timing context, not mandatory edit points.
+Write concise English event paragraphs, preserving character names and original
+reference tokens. Deliver every timeline index, in order:
+=== SETUP ===
+Fixed identities, locations and scene-specific vocal roles.
+=== STORY OUTCOME ===
+The commissioned final result.
+=== CLIP 0 action ===
+Local events for interval zero.
+=== CLIP 1 story ===
+Local events for the next interval; continue for every requested index.
+=== END ===
+Use one supported primary mode in each header. Return the full screenplay once.'''
+
+
 def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
     """Persist allocated scripts and fixed settings, without replanning per slot."""
     contract=ending_contract(req,segments[-1]['start']+segments[-1]['seconds'],segments)
@@ -278,21 +343,28 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
             raise SceneStateError('分段拍攝大綱與專案不符或校驗失敗。')
         return plan
     parts=[('text',json.dumps(task,ensure_ascii=False))]+_pictures(originals)
-    system=(ALLOCATION_SYSTEM+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]+
+    system=((VNEXT_ALLOCATION_SYSTEM if req.get('vnext_preproduction') else ALLOCATION_SYSTEM)+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]+
             '\nApply this intensity to filmable event development; leave shot selection to the clip director.\nSupported modes: '+
             ', '.join(MODES)+f'. Deliver {len(segments)} CLIP blocks.')
     if complete_story:
         system+='\nCOMPLETE STORY SCOPE: Read the ENTIRE user brief before allocation. Budget opening, development, decisive resolution and final image over the ENTIRE available duration. Work backward from the mandatory ending, reserve enough room for it, then fit the middle. Compress optional staging rather than dropping required events or stopping at paragraph N. Musical section labels guide accents only; no outro is required to finish a story. For a very short tail, complete decisive events in the preceding full interval and sustain their result in the tail. If the complete request cannot fit, explicitly report that rather than delivering an incomplete story.'
     attempts=parts
+    # A formatting-only update can recover an existing response without a new 9B call.
+    recovered=None
+    if req.get('vnext_preproduction'):
+        for saved in sorted(Path(work).glob('director_attempt_*.json'),reverse=True):
+            try:
+                candidate=json.loads(saved.read_text(encoding='utf-8'))['raw_response']
+                allocation_delivery(candidate,len(segments),flexible=True)
+                recovered=candidate;break
+            except (ValueError,KeyError,TypeError):
+                continue
     for attempt in range(rewrite_retry_count(req)+1):
-        raw=rewrite(cfg,system,attempts,uuid.uuid4().hex[:8])
+        raw=recovered if attempt==0 and recovered is not None else rewrite(cfg,system,attempts,uuid.uuid4().hex[:8])
         try:
-            from banana_mv.story_plan import direct_delivery
             text=_text(raw)
-            setup=re.match(r'^===\s*SETUP\s*===\s*\n(.*?)(?=^===\s*(?:STORY OUTCOME\s*===|CLIP\s))',text,re.S|re.M)
-            if not setup:raise SceneStateError('分段大綱缺少 SETUP 共用設定。')
-            shared=_bound(setup[1].strip(),len(originals))
-            delivery=direct_delivery(text)
+            shared,delivery=allocation_delivery(raw,len(segments),flexible=bool(req.get('vnext_preproduction')))
+            shared=_bound(shared,len(originals))
             rows=delivery.get('segments')
             if not isinstance(rows,list) or len(rows)!=len(segments):
                 raise SceneStateError(f'需交齊 {len(segments)} 段拍攝大綱。')
@@ -313,7 +385,9 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
             atomic_json(path,plan)
             return plan
         except ValueError as error:
-            atomic_json(Path(work)/f'director_attempt_{attempt:02d}.json',
+            diagnostic=Path(work)/f'director_attempt_{attempt:02d}.json'
+            if diagnostic.exists():diagnostic=Path(work)/f'director_attempt_{attempt:02d}_{uuid.uuid4().hex[:8]}.json'
+            atomic_json(diagnostic,
                         {'raw_response':raw,'error':str(error)})
             if attempt>=rewrite_retry_count(req):
                 raise SceneStateError('分段大綱交稿失敗：'+str(error)) from error

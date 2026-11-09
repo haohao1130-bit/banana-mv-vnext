@@ -9,18 +9,80 @@ import unittest
 from unittest.mock import Mock, patch
 from PIL import Image
 from banana_mv import server
-from banana_mv.preproduction import prepare, compile_prompt
+from banana_mv.preproduction import prepare, compile_prompt, event_units, camera_plan, preview
 import test_shoot_plan as fixtures
 from test_unified_direction import timeline
+from banana_mv.shoot_plan import allocation_delivery, ensure_shoot_plan
 
 
 def cameras():
     return json.dumps({'clips':[{'index':i,'shots':[
-        {'at_ms':0,'camera':'Wide tracking view with warm side light.'},
-        {'at_ms':500,'camera':'Cut closer with foreground depth and a slow lateral move.'}]} for i in range(3)]})
+        {'at_ms':0,'event_ids':[f'c{i}e0'],'camera':'Wide tracking view with warm side light.'}]} for i in range(3)]})
 
 
 class PreproductionTests(unittest.TestCase):
+    def test_actual_failure_shape_missing_right_delimiters_and_end_is_readable(self):
+        raw=('=== SETUP ===\n<Picture 1> is the singer.\n'
+             '=== CLIP 0 action\nA feint causes a defensive reaction.\n'
+             '=== CLIP 1 story\nThe counter lands and the opponent steps back.\n'
+             '=== CLIP 2 story\nBoth regain balance; the commissioned ending follows.')
+        setup,data=allocation_delivery(raw,3,flexible=True)
+        self.assertEqual([r['index'] for r in data['segments']],[0,1,2])
+        self.assertEqual(data['segments'][1]['prompt'],'The counter lands and the opponent steps back.')
+        with self.assertRaises(ValueError):allocation_delivery(raw,3,flexible=False)
+        with self.assertRaises(ValueError):allocation_delivery(raw.split('=== CLIP 2')[0],3,flexible=True)
+
+    def test_saved_failed_delivery_can_be_recovered_without_writer_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['vnext_preproduction']=True
+            raw=fixtures.allocation().replace('=== CLIP 0 story ===','=== CLIP 0 story').replace('=== END ===','')
+            path=root/'director_attempt_03.json'
+            path.write_text(json.dumps({'raw_response':raw,'error':'old delimiter error'}))
+            before=path.read_bytes();model=Mock(side_effect=AssertionError('unnecessary model call'))
+            plan=ensure_shoot_plan(cfg,req,timeline(),images,root,model)
+            self.assertEqual(len(plan['segments']),3)
+            model.assert_not_called();self.assertEqual(path.read_bytes(),before)
+
+    def test_compiler_places_each_causal_event_at_its_assigned_view(self):
+        seg={'index':0,'seconds':15,'director_plan':{'event':
+            'The fighter feints; the opponent opens their guard.\n'
+            'The counter lands; the opponent loses balance and steps back.\n'
+            'The opponent remains down and reacts; the winner catches her breath.'},
+            'fixed_reference_settings':'<Picture 1> identifies the fighter.'}
+        row={'index':0,'shots':[
+            {'at_ms':0,'event_ids':['c0e0','c0e1'],'camera':'Side-on medium two-shot; both gloves and torsos remain visible.'},
+            {'at_ms':11000,'event_ids':['c0e2'],'camera':'Low wide view includes the fallen opponent in the foreground.'}]}
+        camera_plan(json.dumps({'clips':[row]}),[seg],linked=True)
+        text=compile_prompt({'request':{'mode':'independent'}},seg,row)
+        first,second=text.split('detailed_description:\n')[1].split('[Shot 2]')
+        self.assertIn('counter lands',first);self.assertNotIn('remains down',first)
+        self.assertIn('remains down',second);self.assertNotIn('fighter feints',second)
+        self.assertEqual(text.count('The counter lands'),1)
+        self.assertNotIn('Continue the commissioned action',text)
+
+    def test_preview_exposes_all_prepared_prompts_without_affecting_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'preproduction';folder.mkdir()
+            (folder/'ready.json').write_text('{}')
+            for i in range(3):(folder/f'{i:02d}_prompt.txt').write_text(f'prepared {i}')
+            job={'request':{'vnext_preproduction':True},'segments':timeline()}
+            response=preview(copy.deepcopy(job),root)
+            self.assertTrue(all(s['prompt_prepared'] for s in response['segments']))
+            self.assertFalse(any(s.get('prompt') for s in job['segments']))
+
+    def test_camera_receives_native_guide_and_local_ending_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            job={'request':req,'segments':[dict(s,director_plan={'event':f'Event {s["index"]}.'}) for s in timeline()]}
+            model=Mock(return_value=cameras())
+            prepare(cfg,job,images,root,model)
+            self.assertIn('OFFICIAL_NATIVE_GUIDE_MARKER',model.call_args.args[1])
+            payload=json.loads(model.call_args.args[2][0][1])
+            self.assertIn('ending',payload['clips'][0])
+            self.assertIn('events',payload['clips'][0])
+            self.assertIn('NOT a list of mandatory cuts',model.call_args.args[1])
+
     def test_worker_prepares_every_prompt_before_queue_and_resumes_without_9b(self):
         for mode in ('independent','chain'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,ExitStack() as stack:

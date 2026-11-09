@@ -930,7 +930,9 @@ class Handler(WebHandler):
         if url.path=='/api/mv/status':
             try:
                 from banana_mv.takes import describe
-                return self.send_json(describe(read_state(dict(urllib.parse.parse_qsl(url.query))['id'])))
+                from banana_mv.preproduction import preview
+                result=describe(read_state(dict(urllib.parse.parse_qsl(url.query))['id']))
+                return self.send_json(preview(result,job_dir(result['id'])))
             except Exception as e:
                 return self.send_json({'error':str(e)},400)
         if url.path=='/api/mv/clip':

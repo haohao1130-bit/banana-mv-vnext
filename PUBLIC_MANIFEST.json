@@ -19,7 +19,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "15586868aa1808d0efe4ad9de36e9e8c11319991aeefdf9b68d6a92ac10962e4"
+      "sha256": "41d9f1aebf31f3f9ea4d7d76af3cb736529507eef084aa851faa1f06b776bbbf"
     },
     {
       "path": "THIRD_PARTY.md",
@@ -79,7 +79,7 @@
     },
     {
       "path": "banana_mv/preproduction.py",
-      "sha256": "7f0d0ca84c95463b658fca8967c2f5073fbdaf6dc988e35fa20efdb85ce1ad83"
+      "sha256": "512482e5c883ead8d356a2d8d16475de9fc96136ea0fe9889391a4ec4dab9c8f"
     },
     {
       "path": "banana_mv/prompt_quality.py",
@@ -91,7 +91,7 @@
     },
     {
       "path": "banana_mv/server.py",
-      "sha256": "91c18b1d4097995f9381cb228ad509d3fcc23650a8d94940e4a47d98973520d6"
+      "sha256": "dc933cd7771972373d5e137440e7beca1e547b0541b616bb8f5107efaff42b12"
     },
     {
       "path": "banana_mv/services.py",
@@ -99,7 +99,7 @@
     },
     {
       "path": "banana_mv/shoot_plan.py",
-      "sha256": "361d00849c1b96755a7c2c7d009a4495ad5189004134dbdc370d7d0bd39b0e00"
+      "sha256": "d95296df6c3e5792c4ed26ff1dc562335a38d19b2edc95f904e8a2b2794e9dfb"
     },
     {
       "path": "banana_mv/song_context.py",
@@ -123,7 +123,7 @@
     },
     {
       "path": "banana_mv/web/index.html",
-      "sha256": "d2e8035b2388323fb88de84dcf9166b1ebef7250de1de2ae715750be776b3c9f"
+      "sha256": "81873c8cab68fd1ddd98cf0344c38029261a820d1e8874b105038bc6760a70dd"
     },
     {
       "path": "docs/clip_review.md",
@@ -263,7 +263,7 @@
     },
     {
       "path": "tests/test_preproduction.py",
-      "sha256": "1fe4f2cf359b48e904481a07f5b9e0794ec913ef8f6cebe85c47fd49be4da941"
+      "sha256": "474103645e0773534734ab1ff4d7d7187c4ec2fa1faa6d886f9388b33ce4622c"
     },
     {
       "path": "tests/test_prompt_quality.py",

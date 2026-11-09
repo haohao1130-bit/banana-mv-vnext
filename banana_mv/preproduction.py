@@ -8,14 +8,26 @@ from banana_mv.core import normalize_mv_prompt
 from banana_mv.scene_state import atomic_json, parse_object, rewrite_retry_count
 from banana_mv.shoot_plan import _text, _pictures, AUTO_FILMING, DYNAMIC_EDITING, CLIP_INTENSITY, REFERENCE_PERFORMANCE
 from banana_mv.lyrics_reference import excerpt, OUTPUT_POLICY
+from banana_mv.mv_scope import clip_ending
 
 CAMERA_SYSTEM = '''You are the whole-song cinematographer. The supplied screenplay is final.
 Plan photography for every clip in ONE JSON response. Return:
-{"clips":[{"index":0,"shots":[{"at_ms":0,"camera":"English photographic instructions"}]}]}.
+{"clips":[{"index":0,"shots":[{"at_ms":0,"event_ids":["c0e0"],"camera":"English photographic instructions"}]}]}.
 Camera prose specifies composition, subject position, perspective, lighting, focus,
 camera movement and editorial attention. Do not author or paraphrase story actions,
 dialogue, costume changes or outcomes. Refer to commissioned actors by their names.
-The compiler will insert the original commissioned event text unchanged.
+Each supplied event has a stable ID. Assign the IDs to shots in their supplied order,
+each ID once. A shot may cover several consecutive events: choose coverage from the
+action, not one shot per ID. The compiler inserts those exact events in that shot.
+An attack, contact and response can stay in ONE continuous shot. Leave enough time
+to see preparation, execution and the consequence; do not jump to the end state.
+Every camera entry describes only its current continuous view. Put the NEXT cut
+in another shot entry, not inside camera prose. at_ms is the only cut clock.
+SRT/beat times are reference context, NOT a list of mandatory cuts. Source SRT times
+are global; local_srt clip_start/clip_end belong only to that source interval.
+Use each clip's ending context. Intermediate clips keep moving; only the assigned
+final event ends the work. Reserve the final consequence and its visible response
+before the ending. Never paste the global ending into every clip.
 Choose shot counts and timing from the event; no fixed quota or mandatory cuts.
 First shot starts at 0; subsequent at_ms values increase within that clip duration.
 Plan free MV intercuts and parallel locations without resetting ongoing events.
@@ -23,7 +35,14 @@ Source lyrics and vocal assignments are fixed. No new dialogue or soundtrack.
 References define identities and environments, not mandatory attendance or poses.'''
 
 
-def camera_plan(raw, segments):
+def event_units(seg):
+    """Lossless paragraph/line units; keep multi-phase action clauses together."""
+    text=seg['director_plan']['event']
+    lines=[line.strip() for line in text.splitlines() if line.strip() and not re.match(r'^Mode\s*:',line,re.I)]
+    return [{'id':f'c{seg["index"]}e{i}','text':line} for i,line in enumerate(lines)]
+
+
+def camera_plan(raw, segments, *, linked=False):
     """Only check fields needed to address clips and place cuts on the timeline."""
     data=parse_object(_text(raw));rows=data.get('clips')
     if not isinstance(rows,list) or len(rows)!=len(segments):
@@ -42,6 +61,18 @@ def camera_plan(raw, segments):
                 raise ValueError('切鏡時間需從零開始，遞增且位於當段內。')
             if not isinstance(camera,str) or not camera.strip():raise ValueError('缺少攝影內容。')
             previous=start
+        if linked:
+            # Address correspondence, not a semantic/creative review. The compiler
+            # must know where to put each source event instead of stuffing Shot 1.
+            expected=[e['id'] for e in event_units(seg)]
+            assigned=[]
+            for shot in shots:
+                ids=shot.get('event_ids')
+                if not isinstance(ids,list) or not ids or any(not isinstance(e,str) for e in ids):
+                    raise ValueError('每鏡需引用事件編號；一鏡可拍多個連續事件。')
+                assigned.extend(ids)
+            if assigned!=expected:
+                raise ValueError('鏡頭事件編號需依原順序交齊，每個編號一次；可自由合併於同一鏡。')
     return data
 
 
@@ -54,14 +85,19 @@ def compile_prompt(job, seg, row):
     setup=connected(seg.get('fixed_reference_settings') or job.get('plan_preview_setup',''))
     first=('<Picture 1> is the preceding last frame, a continuity guide rather than a new actor.\n' if offset else '')
     lines=[]
+    events={e['id']:connected(e['text']) for e in event_units(seg)}
     for i,shot in enumerate(row['shots']):
         ms=shot['at_ms']; clock=f'{ms//60000:02d}:{ms//1000%60:02d}.{ms%1000:03d}'
         prefix=f'[Shot {i+1}] '+(f'At {clock}, ' if i else '')
-        lines.append(prefix+connected(shot['camera'])+('\n'+event if i==0 else
-            '\nContinue the commissioned action at this point in its original order; this cut adds no new event.'))
+        if 'event_ids' in shot:
+            action='\n'.join(events[e] for e in shot['event_ids'])
+        else:
+            # Existing v1 plans stay readable; never migrate a saved production.
+            action=event if i==0 else 'Continue the commissioned action at this point in its original order; this cut adds no new event.'
+        lines.append(prefix+connected(shot['camera'])+'\n'+action)
     return '\n\n'.join((
         'subject_definitions:\n'+first+setup+'\n<Audio 1> is the supplied original song window.',
-        'summary:\n[reference generation + audio reuse] '+event,
+        'summary:\n[reference generation + audio reuse] Film this commissioned interval in the supplied event order, using the connected identities and unchanged source song.',
         'retention_analysis:\n<Audio 1>: fully_copy - reuse the original recording unchanged. Preserve assigned reference identities and current script appearance.',
         'detailed_description:\n'+'\n'.join(lines),
         'overall_soundscape:\nThe supplied source recording unchanged. '+OUTPUT_POLICY+' No new dialogue or generated sound layers.',
@@ -73,9 +109,11 @@ def prepare(cfg,job,originals,work,rewrite):
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     ready=folder/'ready.json'
     if ready.is_file():return
-    screenplay={'shared_setup':job.get('plan_preview_setup',''),
+    screenplay={'version':2,'shared_setup':job.get('plan_preview_setup',''),
         'clips':[{'index':s['index'],'seconds':s['seconds'],
                   'event':s['director_plan']['event'],
+                  'events':event_units(s),
+                  'ending':clip_ending(job['request'],s),
                   'fixed_reference_settings':s.get('fixed_reference_settings',''),
                   'local_srt':excerpt(job['request'],s),
                   'audio_evidence':s.get('audio_evidence',{})} for s in job['segments']],
@@ -89,12 +127,14 @@ def prepare(cfg,job,originals,work,rewrite):
         payload=json.dumps(screenplay,ensure_ascii=False)
         system=CAMERA_SYSTEM+'\n'+AUTO_FILMING+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[job['request'].get('intensity','high')]
         system+='\n'+(DYNAMIC_EDITING if job['request'].get('dynamic_cuts',True) else 'Prefer motivated longer takes.')
+        system+='\nH3 OUTPUT WRITING GUIDE (format vocabulary only; return the camera JSON requested above):\n'+Path(cfg['guides']['ref']).read_text(encoding='utf-8')
+        system+='\nReturn only the camera JSON schema above, with event_ids. Do not return the six-section final prompt; Python compiles it.'
         parts=[('text',payload)]+_pictures(originals)
         for attempt in range(rewrite_retry_count(job['request'])+1):
             raw=rewrite(cfg,system,parts,uuid.uuid4().hex[:8])
             (folder/f'camera_raw_{attempt:02d}.txt').write_text(raw,encoding='utf-8')
             try:
-                camera=camera_plan(raw,job['segments']);break
+                camera=camera_plan(raw,job['segments'],linked=True);break
             except ValueError as error:
                 if attempt==rewrite_retry_count(job['request']):raise
                 parts=[('text',payload+'\nReturn complete camera JSON. Fix: '+str(error))]+_pictures(originals)
@@ -102,7 +142,7 @@ def prepare(cfg,job,originals,work,rewrite):
     for seg,row in zip(job['segments'],camera['clips']):
         prompt=normalize_mv_prompt(compile_prompt(job,seg,row),len(originals)+int(job['request'].get('mode')=='chain' and seg['index']>0))
         (folder/f'{seg["index"]:02d}_prompt.txt').write_text(prompt,encoding='utf-8')
-    atomic_json(ready,{'version':1,'clip_count':len(job['segments'])})
+    atomic_json(ready,{'version':2,'clip_count':len(job['segments'])})
 
 
 def prompt(work,index):
@@ -110,3 +150,15 @@ def prompt(work,index):
     folder=Path(work)/'preproduction'
     if not (folder/'ready.json').is_file():raise ValueError('全曲備稿尚未完成。')
     return (folder/f'{index:02d}_prompt.txt').read_text(encoding='utf-8')
+
+
+def preview(job,work):
+    """Enrich a read-only status response, without marking any clip as rendered."""
+    folder=Path(work)/'preproduction'
+    if not job.get('request',{}).get('vnext_preproduction') or not (folder/'ready.json').is_file():return job
+    for seg in job['segments']:
+        path=folder/f'{seg["index"]:02d}_prompt.txt'
+        if not seg.get('prompt') and path.is_file():
+            seg['prompt']=path.read_text(encoding='utf-8')
+            seg['prompt_prepared']=True
+    return job
