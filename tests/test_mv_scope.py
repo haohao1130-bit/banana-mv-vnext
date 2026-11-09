@@ -59,16 +59,18 @@ class ScopeTests(unittest.TestCase):
             contract = ending_contract({'project_scope':'full'}, total, clips)
             with self.subTest(tail=tail):
                 self.assertEqual(bool(contract['short_tail_seconds']), expected)
-                self.assertEqual(contract['resolve_start_by'], 60 if expected else 70)
+                last_start = clips[-1]['start']
+                self.assertAlmostEqual(contract['resolve_start_by'],
+                                       clips[-2]['start'] if expected else last_start, places=5)
                 if expected:
-                    self.assertEqual(contract['settle_by'], 70)
+                    self.assertAlmostEqual(contract['settle_by'], last_start, places=5)
                     last = clip_ending({'project_scope':'full'},
                                        dict(clips[-1],segment_count=len(clips),
                                             song_seconds=total,direction_ending_contract=contract))
                     self.assertEqual(last['phase'], 'terminal_hold')
                     self.assertEqual(last['local_settle_by'], 0)
                 else:
-                    self.assertGreater(contract['settle_by'], 70)
+                    self.assertGreater(contract['settle_by'], last_start)
 
     def test_full_length_last_interval_does_not_count_as_short_tail(self):
         from banana_mv.core import segments
