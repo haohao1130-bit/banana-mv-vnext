@@ -52,12 +52,21 @@ Use concise English prose; retain source lyrics and names in their language.
 '''
 
 
+
+def definition_text(value):
+    """Render structured identity tables without dropping fields or guessing slots."""
+    if isinstance(value,str) and value.strip():return value
+    if isinstance(value,(list,dict)) and value:
+        return json.dumps(value,ensure_ascii=False,indent=2)
+    raise ValueError('全曲攝影稿缺少身份定義；需有非空文字、陣列或物件。')
+
+
 def parse_film(raw, duration_ms):
     text=_text(raw).strip()
     if text.startswith('```'):text=text.split('\n',1)[1].rsplit('```',1)[0].strip()
     data=json.loads(text)
-    if not isinstance(data,dict) or not isinstance(data.get('subject_definitions'),str):
-        raise ValueError('全曲攝影稿缺少身份定義。')
+    if not isinstance(data,dict):raise ValueError('全曲攝影稿需為 JSON 物件。')
+    data['subject_definitions']=definition_text(data.get('subject_definitions'))
     beats=data.get('beats')
     if not isinstance(beats,list) or not beats:raise ValueError('全曲攝影稿缺少時間軸。')
     previous=-1
@@ -138,7 +147,19 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
                 (DYNAMIC_EDITING if req.get('dynamic_cuts',True) else 'Use motivated longer continuous takes; preserve requested one-take photography.')+
                 '\n'+OPTIONAL_TIMING_POLICY)
         parts=[('text',json.dumps(source,ensure_ascii=False))]+_pictures(originals)
-        for attempt in range(rewrite_retry_count(req)+1):
+        # Saved raw deliveries belong to this immutable job. Recover a complete
+        # response before paying for another creative call; never close truncated JSON.
+        film=None;recovery=[]
+        for candidate in sorted(folder.glob('whole_film_raw_*.txt'),key=lambda p:p.stat().st_mtime):
+            try:
+                film=parse_film(candidate.read_text(encoding='utf-8'),duration_ms)
+                recovery.append({'raw_file':candidate.name,'accepted':True})
+                break
+            except (ValueError,TypeError,OSError) as exc:
+                recovery.append({'raw_file':candidate.name,'accepted':False,'error':str(exc)})
+        if recovery:
+            atomic_json(folder/'whole_film_recovery.json',{'input_sha256':fingerprint,'attempts':recovery})
+        for attempt in range(0 if film is not None else rewrite_retry_count(req)+1):
             started=time.monotonic()
             raw=rewrite(writer_cfg,system,parts,uuid.uuid4().hex[:8])
             atomic_json(folder/'whole_film_generation.json', {'attempt':attempt+1,

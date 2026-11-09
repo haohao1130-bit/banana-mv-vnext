@@ -66,3 +66,19 @@ compiled prompts. No GPU inference was launched during implementation.
 The branch notebook explicitly clones `feature/continuous-film`; use a fresh
 Colab runtime because the existing bootstrap intentionally reuses an installed
 checkout. Main remains on the prior implementation until live evaluation.
+
+## First live delivery failure: task 73c4d5f974bb
+
+All four raw attempts supplied subject_definitions as an array of identity records,
+while the initial parser accepted only a string and incorrectly reported missing
+identity. Two attempts are complete JSON (16 and 5 beats); two exhibit repetition
+and end inside a string. Accept nonempty string/list/object identity definitions,
+rendering structured tables losslessly without guessing Picture mappings or
+renumbering identities. On resume, inspect this immutable job's saved raw attempts
+in creation order and recover the first structurally valid complete timeline before
+calling 9B. Keep every raw file and log accepted/rejected candidates. Never close
+truncated JSON to manufacture a complete film. The actual two complete deliveries
+compiled into all four windows offline; this says nothing about their story quality.
+
+Model repetition/truncation remains a separate observed generation limitation.
+This fix does not claim to solve it or silently accept a partial timeline.

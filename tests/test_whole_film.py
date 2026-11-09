@@ -31,6 +31,47 @@ def film():
 
 
 class WholeFilmTests(unittest.TestCase):
+    def test_subject_tables_are_not_misreported_as_missing(self):
+        for definitions in ([{'id':'S1','name':'Lead','appearance':'current source identity'}],
+                            {'<Subject 7>':{'source':'<Picture 2>','role':'silent opponent'}},
+                            ['<Subject 3> is the environment.']):
+            with self.subTest(definitions=definitions):
+                original=film();original['subject_definitions']=definitions
+                parsed=parse_film('```json\n'+json.dumps(original)+'\n```',9000)
+                self.assertEqual(json.loads(parsed['subject_definitions']),definitions)
+                self.assertEqual(parsed['beats'],original['beats'])
+        for absent in (None,'',[],{}):
+            bad=film();bad['subject_definitions']=absent
+            with self.assertRaises(ValueError):parse_film(json.dumps(bad),9000)
+
+    def test_saved_structured_identity_delivery_recovers_without_model_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            folder=root/'preproduction';folder.mkdir()
+            broken=folder/'whole_film_raw_broken.txt';broken.write_text('{"beats":[')
+            original=film();definitions=[{'subject_id':'S1','name':'Lead','role':'only singer'}]
+            original['subject_definitions']=definitions
+            saved=folder/'whole_film_raw_valid.txt';saved.write_text(json.dumps(original))
+            before=saved.read_bytes();writer=Mock(side_effect=AssertionError('unnecessary 9B call'))
+            ensure_film(cfg,req,timeline(),images,root,writer)
+            writer.assert_not_called();self.assertEqual(saved.read_bytes(),before)
+            recovery=json.loads((folder/'whole_film_recovery.json').read_text())
+            self.assertTrue(recovery['attempts'][-1]['accepted'])
+            self.assertEqual(recovery['attempts'][-1]['raw_file'],saved.name)
+            master=json.loads((folder/'whole_film.json').read_text())
+            self.assertEqual(json.loads(master['film']['subject_definitions']),definitions)
+
+    def test_truncated_saved_output_is_not_closed_or_accepted_as_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            folder=root/'preproduction';folder.mkdir()
+            saved=folder/'whole_film_raw_truncated.txt';saved.write_text(json.dumps(film())[:-20])
+            writer=Mock(return_value=json.dumps(film()))
+            ensure_film(cfg,req,timeline(),images,root,writer)
+            self.assertEqual(writer.call_count,1)
+            recovery=json.loads((folder/'whole_film_recovery.json').read_text())
+            self.assertFalse(recovery['attempts'][0]['accepted'])
+
     def test_cut_inside_action_receives_only_ongoing_state_and_current_events(self):
         f=parse_film(json.dumps(film()),9000)
         rows=window(f,4000,8000)
