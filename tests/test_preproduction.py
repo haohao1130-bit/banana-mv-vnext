@@ -71,17 +71,35 @@ class PreproductionTests(unittest.TestCase):
             self.assertTrue(all(s['prompt_prepared'] for s in response['segments']))
             self.assertFalse(any(s.get('prompt') for s in job['segments']))
 
-    def test_camera_receives_native_guide_and_local_ending_context(self):
+    def test_native_director_receives_full_story_and_can_expand_performance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
             job={'request':req,'segments':[dict(s,director_plan={'event':f'Event {s["index"]}.'}) for s in timeline()]}
-            model=Mock(return_value=cameras())
+            model=Mock(side_effect=[fixtures.native_prompt(i) for i in range(3)])
             prepare(cfg,job,images,root,model)
-            self.assertIn('OFFICIAL_NATIVE_GUIDE_MARKER',model.call_args.args[1])
-            payload=json.loads(model.call_args.args[2][0][1])
-            self.assertIn('ending',payload['clips'][0])
-            self.assertIn('events',payload['clips'][0])
-            self.assertIn('NOT a list of mandatory cuts',model.call_args.args[1])
+            self.assertEqual(model.call_count,3)
+            for i,call in enumerate(model.call_args_list):
+                self.assertIn('OFFICIAL_NATIVE_GUIDE_MARKER',call.args[1])
+                self.assertIn('Actively invent',call.args[1])
+                payload=json.loads(call.args[2][0][1])
+                self.assertEqual(payload['target_clip_index'],i)
+                self.assertEqual(len(payload['whole_screenplay']['clips']),3)
+                self.assertIn('ending',payload['whole_screenplay']['clips'][i])
+                self.assertEqual((root/f'preproduction/{i:02d}_prompt.txt').read_text(),fixtures.native_prompt(i))
+
+    def test_interrupted_native_writing_preserves_completed_drafts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            job={'request':req,'segments':[dict(s,director_plan={'event':f'Event {s["index"]}.'}) for s in timeline()]}
+            with self.assertRaises(RuntimeError):
+                prepare(cfg,job,images,root,Mock(side_effect=[fixtures.native_prompt(0),RuntimeError('interrupted')]))
+            first=(root/'preproduction/00_prompt.txt').read_bytes()
+            self.assertFalse((root/'preproduction/ready.json').exists())
+            model=Mock(side_effect=[fixtures.native_prompt(1),fixtures.native_prompt(2)])
+            prepare(cfg,job,images,root,model)
+            self.assertEqual(model.call_count,2)
+            self.assertEqual((root/'preproduction/00_prompt.txt').read_bytes(),first)
+            self.assertTrue((root/'preproduction/ready.json').exists())
 
     def test_worker_prepares_every_prompt_before_queue_and_resumes_without_9b(self):
         for mode in ('independent','chain'):
@@ -94,9 +112,9 @@ class PreproductionTests(unittest.TestCase):
                      'duration':9,'output_size':[32,32]}
                 calls=[];graphs=[];downloads=[0]
                 def model(*args):
-                    calls.append(args);return fixtures.allocation() if len(calls)==1 else cameras()
+                    calls.append(args);return fixtures.allocation() if len(calls)==1 else fixtures.native_prompt(len(calls)-2)
                 def queue(cfg,graph):
-                    self.assertEqual(len(calls),2)
+                    self.assertEqual(len(calls),4)
                     self.assertTrue((work/'preproduction/ready.json').exists())
                     self.assertTrue(all((work/f'preproduction/{i:02d}_prompt.txt').is_file() for i in range(3)))
                     graphs.append(copy.deepcopy(graph));return str(len(graphs))
@@ -122,7 +140,7 @@ class PreproductionTests(unittest.TestCase):
                 job['resuming']=True;lock.acquire()
                 server.worker(job,cfg,images,root/'song.wav',root/'song.wav')
                 self.assertEqual(job['status'],'done',job.get('error'))
-                self.assertEqual(len(calls),2)
+                self.assertEqual(len(calls),4)
                 self.assertEqual((work/'00_part_v1.mp4').read_bytes(),first)
                 self.assertTrue(all(g['7']['inputs']['audio_mode']=='lock_source' for g in graphs))
                 self.assertEqual(graphs[1]['7']['inputs']['prompt'],graphs[2]['7']['inputs']['prompt'])
@@ -138,7 +156,7 @@ class PreproductionTests(unittest.TestCase):
             job={'id':work.name,'request':req,'segments':timeline(),'status':'running',
                  'size':[32,32],'images_comfy':['ref0.png','ref1.png'],'seed':42,
                  'duration':9,'output_size':[32,32]}
-            model=Mock(side_effect=[fixtures.allocation(),cameras()]);queue=Mock()
+            model=Mock(side_effect=[fixtures.allocation()]+[fixtures.native_prompt(i) for i in range(3)]);queue=Mock()
             lock=threading.Lock();lock.acquire()
             for owner,name,value in [(server,'RUNS',root),(server,'GPU_LOCK',lock),
                 (server.backend,'DATA',root),(server.backend,'rewrite_local',model),
@@ -153,8 +171,9 @@ class PreproductionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
             job={'request':req,'segments':[dict(s,director_plan={'event':'A quiet scene.'}) for s in timeline()]}
-            with self.assertRaises(ValueError):prepare(cfg,job,images,root,Mock(return_value='not json'))
-            self.assertTrue((root/'preproduction/camera_raw_00.txt').exists())
+            job['request']['h3_validation_version']=1
+            with self.assertRaises(ValueError):prepare(cfg,job,images,root,Mock(return_value='not a native prompt'))
+            self.assertTrue(list((root/'preproduction').glob('director_00_raw_*.txt')))
             self.assertFalse((root/'preproduction/ready.json').exists())
 
     def test_original_cast_and_fifteen_second_window_are_not_restricted(self):

@@ -104,45 +104,74 @@ def compile_prompt(job, seg, row):
         'non_diegetic_music:\nThe supplied original song; no replacement music.'))
 
 
+NATIVE_DIRECTOR = """You are the screen director and native H3 Ref2VA prompt writer.
+Read the whole commissioned screenplay to understand dramatic progression. Expand
+ONLY the target interval into a complete production-ready filming prompt, using
+the official six-section format below. Preserve commissioned identities, vocal
+roles, core events, causal progression and local outcome. Actively invent the
+specific performance, physical choreography, expressions, reactions, blocking,
+composition, lighting, coverage and montage that bring those events to life.
+One event may unfold across several shots. Choose shot count and pacing from the
+scene and music; every cut reveals a new detail, action phase or reaction. Choose
+close-ups, inserts, wide views, subjective angles and temporal speed changes when
+they serve the event, rather than cycling a checklist. Show preparation, execution
+and consequence. Temporal effects change visual action only; source music stays
+unchanged. Parallel scenes remain distinct and their action progresses across cuts.
+Use the full-story context for continuity, while filming the assigned interval;
+continuing intervals remain in progress, and the assigned resolution is fully shown.
+SRT and music analysis provide timing context, not mandatory cut points.
+The supplied recording is unchanged: retention_analysis includes <Audio 1>:
+fully_copy. Only assigned vocalists lip-sync the original lyrics at supplied timing.
+Keep audio reuse and vocal roles intact; overall_soundscape and non_diegetic_music
+refer to the supplied recording. External effects are mixed separately. Write no
+new speech, lyrics or replacement music. Supporting cast without photos keeps its
+script identity. Reference pictures identify assets; they do not dictate framing.
+Return only the complete native six-section prompt in English, keeping source
+lyrics and visible text in their original language. Use clip-local cut times.
+"""
+
+
 def prepare(cfg,job,originals,work,rewrite):
-    """Reuse the allocated full story; one whole-song camera request before GPU."""
+    """Complete every native director prompt before the existing render loop."""
+    from banana_mv.shoot_plan import validate_native_mv_format
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     ready=folder/'ready.json'
     if ready.is_file():return
-    screenplay={'version':2,'shared_setup':job.get('plan_preview_setup',''),
+    screenplay={'version':3,'shared_setup':job.get('plan_preview_setup',''),
         'clips':[{'index':s['index'],'seconds':s['seconds'],
                   'event':s['director_plan']['event'],
-                  'events':event_units(s),
                   'ending':clip_ending(job['request'],s),
                   'fixed_reference_settings':s.get('fixed_reference_settings',''),
                   'local_srt':excerpt(job['request'],s),
-                  'audio_evidence':s.get('audio_evidence',{})} for s in job['segments']],
-        'lyrics':job['request'].get('lyrics',''),
-        'srt_cues':job['request'].get('srt_cues',[])}
+                  'audio_evidence':s.get('audio_evidence',{})} for s in job['segments']]}
     atomic_json(folder/'screenplay.json',screenplay)
-    path=folder/'camera.json'
-    if path.is_file():
-        camera=camera_plan(path.read_text(encoding='utf-8'),job['segments'])
-    else:
-        payload=json.dumps(screenplay,ensure_ascii=False)
-        system=CAMERA_SYSTEM+'\n'+AUTO_FILMING+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[job['request'].get('intensity','high')]
-        system+='\n'+(DYNAMIC_EDITING if job['request'].get('dynamic_cuts',True) else 'Prefer motivated longer takes.')
-        system+='\nH3 OUTPUT WRITING GUIDE (format vocabulary only; return the camera JSON requested above):\n'+Path(cfg['guides']['ref']).read_text(encoding='utf-8')
-        system+='\nReturn only the camera JSON schema above, with event_ids. Do not return the six-section final prompt; Python compiles it.'
-        parts=[('text',payload)]+_pictures(originals)
-        for attempt in range(rewrite_retry_count(job['request'])+1):
+    guide=Path(cfg['guides']['ref']).read_text(encoding='utf-8')
+    system=NATIVE_DIRECTOR+'\n'+guide
+    req=job['request']
+    style=AUTO_FILMING+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]
+    style+='\n'+(DYNAMIC_EDITING if req.get('dynamic_cuts',True) else 'Prefer motivated longer takes.')
+    # Write against the original image numbering. At render time chain mode adds
+    # its actual preceding frame, so shift original references only after writing.
+    for seg in job['segments']:
+        path=folder/f'{seg["index"]:02d}_prompt.txt'
+        if path.is_file():continue
+        payload={'whole_screenplay':screenplay,'target_clip_index':seg['index'],
+                 'duration_seconds':seg['seconds'],'direction':style}
+        parts=[('text',json.dumps(payload,ensure_ascii=False))]+_pictures(originals)
+        for attempt in range(rewrite_retry_count(req)+1):
             raw=rewrite(cfg,system,parts,uuid.uuid4().hex[:8])
-            (folder/f'camera_raw_{attempt:02d}.txt').write_text(raw,encoding='utf-8')
+            (folder/f'director_{seg["index"]:02d}_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
             try:
-                camera=camera_plan(raw,job['segments'],linked=True);break
+                text=validate_native_mv_format(normalize_mv_prompt(_text(raw),len(originals)),seg['seconds'],require_native=req.get('h3_validation_version')==1)
+                break
             except ValueError as error:
-                if attempt==rewrite_retry_count(job['request']):raise
-                parts=[('text',payload+'\nReturn complete camera JSON. Fix: '+str(error))]+_pictures(originals)
-        atomic_json(path,camera)
-    for seg,row in zip(job['segments'],camera['clips']):
-        prompt=normalize_mv_prompt(compile_prompt(job,seg,row),len(originals)+int(job['request'].get('mode')=='chain' and seg['index']>0))
-        (folder/f'{seg["index"]:02d}_prompt.txt').write_text(prompt,encoding='utf-8')
-    atomic_json(ready,{'version':2,'clip_count':len(job['segments'])})
+                if attempt==rewrite_retry_count(req):raise
+                parts=[('text',json.dumps(payload,ensure_ascii=False)+'\nCorrect native format or local timing: '+str(error))]+_pictures(originals)
+        if req.get('mode')=='chain' and seg['index']>0:
+            text=re.sub(r'<Picture (\d+)>',lambda m:f'<Picture {int(m[1])+1}>',text)
+            text='subject_definitions:\n<Picture 1> is the actual preceding last frame, a continuity guide rather than another actor.\n'+re.sub(r'^\s*subject_definitions\s*:\s*','',text,count=1)
+        path.write_text(text,encoding='utf-8')
+    atomic_json(ready,{'version':3,'clip_count':len(job['segments'])})
 
 
 def prompt(work,index):

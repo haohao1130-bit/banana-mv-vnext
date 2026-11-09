@@ -278,7 +278,7 @@ def allocation_delivery(raw, expected_count, *, flexible=False):
 VNEXT_ALLOCATION_SYSTEM = '''Prepare the COMPLETE music-video screenplay across the supplied timeline.
 Return the requested delivery directly, without analysis. Preserve user-required
 events, their causal order, vocal roles, reference identities, parallel locations,
-current appearances and ending. Develop a rough brief within its adaptation policy;
+current appearances and ending. As screenwriter, actively complete a rough story spine into a vivid full screenplay: establish motivation, escalating conflict, physical interactions, emotional reactions, turning points, climax and resolution as appropriate to the genre. Invent connective events and original staging consistent with the brief; preserve all explicit user requirements. Develop it within its adaptation policy;
 retain the user's detailed actions when they are already supplied.
 SETUP contains invariant identity/reference mappings, locations and scene-specific
 singing duties only. Supporting cast without images remains original cast; describe
