@@ -1,0 +1,684 @@
+"""Allocate once; let the native H3 rewriter shoot each isolated interval."""
+import json
+import re
+import uuid
+from pathlib import Path
+
+from banana_mv.core import map_image_mentions, normalize_mv_prompt
+from banana_mv.director import MODES
+from banana_mv.lyrics_reference import excerpt
+from banana_mv.mv_scope import clip_ending, ending_contract
+from banana_mv.scene_state import SceneStateError, atomic_json, digest, rewrite_retry_count
+
+
+# Match Toybox's native Ref2VA enhancement role, rather than treating the
+# specialized rewriter as a general JSON-task executor. The official guide stays
+# authoritative for shot prose and output structure; MV source-audio rules follow
+# in the user message. No additional writer or fixed camera recipe is involved.
+NATIVE_ENHANCER_SYSTEM = (
+    "You enhance prompts for reference-conditioned video and audio generation (Ref2VA). "
+    "Use explicit bindings for referenced actors and the fixed designs for original supporting actors; never reassign a role by appearance or picture order. "
+    "Preserve intent and explicit constraints while developing visual details. Source-audio and optional effects rules below override sound examples in the guide. "
+    "Follow the guide below and return only its six sections in order, "
+    "with plain-text headers on separate lines and no Markdown fences.\n\n"
+)
+
+CREATIVE_DIRECTION = """ADAPTATION: FREE. Act as an inventive MV director, not a literal script formatter.
+Proactively develop striking visual events, performance business, interactions,
+reaction details and environmental changes that serve the supplied story spine.
+Make these choices even when the user supplies no camera or montage instructions.
+Treat descriptive staging and camera suggestions as material to reinterpret, unless
+explicitly mandatory. Preserve reference identities, vocal roles, fixed geography,
+required causal milestones, specified outcome and explicit hard constraints.
+Choose genre-appropriate camera positions, perspective, movement and editorial
+juxtapositions. Use performance, inserts, reactions and environment as meaningful
+coverage; create rhythmic, parallel, contrast or action-matched montage where useful.
+Set intensity from the selected level and actual music/story passage. Precision means
+committing to executable choices, including bold ones, while keeping cause and effect
+readable. Develop the current beat without borrowing later milestones or replaying it.
+"""
+
+FAITHFUL_DIRECTION = """ADAPTATION: FAITHFUL. Preserve the supplied events, action meanings, causal
+links, participants, props, order and specified camera requests. Translate them into
+concrete expressive photography and editing without adding new story events.
+"""
+
+
+def adaptation_direction(req):
+    return CREATIVE_DIRECTION if req.get('story_plan',True) else FAITHFUL_DIRECTION
+
+
+REFERENCE_PERFORMANCE = """IDENTITY AND PERFORMANCE: For a referenced actor, preserve the assigned
+reference identity and current appearance. References are identity anchors, not a
+closed cast list. When the user requests supporting roles without reference images,
+create original distinct characters as authorized; missing reference images do NOT
+mean those characters cannot exist. Never turn the singer, boxer or another referenced
+actor into a requested guitarist, bassist, drummer or other original supporting role.
+Only an explicit user restriction forbids additional cast. Preserve original supporting
+characters using their fixed name/role, appearance, costume, instrument and stage position;
+do not demand an uploaded image, borrow an existing actor's face, or invent <Picture N>.
+Use independent <Subject N> definitions with descriptions, without a false picture binding.
+In both FREE and FAITHFUL adaptation, interpret broad wording
+such as 'keep/maintain the reference image unchanged', 'match the reference completely'
+or 'preserve appearance' as identity and appearance continuity, not a performance lock.
+A pictured blink, closed eyes, neutral face, gaze or resting pose is a momentary state;
+direct eyes opening, expressions changing and the body performing as the event requires.
+Only an explicit instruction to sustain a particular expression, eye state, gaze or
+pose makes that state a performance constraint for its stated scope.
+A reference expression sheet demonstrates the same identity
+in different states; it is not an acting menu or a limit on emotional range.
+Direct facial expression, gaze, jaw tension, head/neck movement and body response as
+changing performances driven by the current event, vocal-role timing and musical
+context, at the selected intensity. Show a concrete emotional progression rather
+than holding a reference expression throughout. In an angry vocal peak, give anger
+visible physical expression; in other passages, choose the performance they require.
+Keep subject_definitions focused on stable identity and describe evolving performance
+inside the shots. In retention_analysis, preserve identity without claiming the pictured
+expression or pose must stay unchanged. Explicit user performance requirements prevail.
+An actual first/last-frame anchor constrains that boundary frame, not the entire clip.
+Keep lip movement compatible with the supplied audio; add no new vocal material.
+"""
+
+
+AUTO_FILMING = """Direct concrete, expressive shots using the supplied H3 camera and
+shot-writing guide. Choose focal subject, position, viewpoint, composition, motion,
+lighting and attention shifts from the commissioned event; never impose a fixed
+shot count or camera recipe. Carry each event and its physical state through cuts.
+A clip boundary is not a story ending. Preserve source-song performance, the
+assigned vocalist's lip sync, and changes in visual energy motivated by the music.
+"""
+
+DYNAMIC_EDITING = """Use motivated, numbered cuts when the current music or
+story benefits from a change of viewpoint, action detail, reaction, performance
+or parallel scene. A camera move is not a cut. Choose shot duration freely; do
+not cut at every beat, repeat completed action or force a closing pose.
+Honor commissioned one-take shots and preserve vocal phrases across edits.
+"""
+
+CLIP_INTENSITY = {
+    'normal':'''PHOTOGRAPHIC INTENSITY: NATURAL. Use restrained, grounded performance,
+observational framing, subtle movement and scene-motivated light. Still make complete,
+precise filming decisions and use editorial coverage when dynamic editing is enabled.''',
+    'high':'''PHOTOGRAPHIC INTENSITY: HIGH. Direct an assertive, visually inventive commercial MV.
+Create strong camera placement, perspective, foreground/background depth, purposeful
+movement and shaped lighting. Make the performance and its surrounding visual details
+active and specific. When dynamic editing is enabled, construct varied viewpoints,
+inserts, reactions and intercuts into a rhythmic sequence, including short shots
+within the same event. Choose the combination creatively, not a rotating camera list.
+Design moving views through an explicit starting composition, path, speed, extent and
+ending composition; show the changing spatial relationships. Carry action and results
+across cuts. Precise execution supports ambitious photography, not cautious staging.''',
+    'extreme':"""PHOTOGRAPHIC INTENSITY: CINEMATIC BURST. Direct a bold, spectacular commercial MV.
+Use the same precise execution required at HIGH intensity, with greater contrasts in
+scale, perspective, proximity, camera travel, lighting and performance. Design visual
+builds and decisive peaks from this passage's music, emotion, comedy, action or spectacle.
+When dynamic editing is enabled, actively compose punchy within-scene shot clusters and
+cross-scene montage, using visual connections and contrasts to intensify the sequence.
+An ordinary task can become striking through its photography and editing. Create
+specific visual ideas even when the user provides only the story spine. Design camera
+paths from clear starting and ending compositions, including foreground passes and
+background displacement where relevant. Commit to direction, extent and speed.
+Keep important contact, reactions, vocal performance and causal results legible;
+respect explicit continuous-take requests and the allocated ending. Photographic
+intensity changes the filmmaking, not the assigned characters, vocal roles or outcome.
+Cinematic burst is not sped-up playback or universally faster bodies/cameras. Preserve
+believable acceleration, contact, follow-through and deceleration. Create impact via
+motivated cuts, viewpoints, timing and light; do not cram extra actions per second.
+"""
+}
+
+
+ALLOCATION_SYSTEM = """Prepare a filmable music-video story across the given source intervals.
+When audio_evidence.music_structure is present, its labels and beat/downbeat times
+are fallible model predictions, not loudness guesses. Use section transitions to
+build anticipation, contrast and a few motivated story/performance payoffs. Allocate
+the main climax once where the music and requested story support it; do not replay
+the finale in each chorus. Carry clip-local musical timing into each commission.
+A solo label does not establish its instrument; labels never override vocal roles.
+Write SETUP and CLIP story prose in English; retain original character names and reference tokens.
+Apply the supplied adaptation policy while developing and allocating the story.
+Build filmable events at the selected intensity; the native clip director later
+turns each assigned beat into precise shots. Keep both parallel strands in each
+normal-length interval when requested; each strand advances in its own fixed space.
+Extract shared SETUP from the user's fixed world, reference and vocal-role settings.
+Keep their original wording and distinct locations; do not summarize or redesign them.
+SETUP will be sent to every clip director as FIXED REFERENCE SETTINGS.
+Include explicit name/role-to-<Picture N> bindings for every supplied actor and location,
+fixed geography, vocal duties and invariant performance rules.
+Separate invariant rules (who sings, actor identity, separate locations) from story
+outcomes (who wins, an award, a final gag or final pose). A required outcome is still
+a plot event, never an invariant reference rule. Put the whole-work outcome in the
+separate STORY OUTCOME block for upstream planning only, then allocate its actual
+events to the CLIP commissions that perform them. STORY OUTCOME is NOT forwarded
+to clip directors. Do not duplicate it inside SETUP under "hard restrictions".
+When the brief requests unreferenced supporting roles, CREATE their fixed designs in
+SETUP before allocating clips: a stable name/role, distinctive appearance, costume,
+instrument/prop and home position/location for each. Follow requested adult status
+and other design constraints. Treat them as original cast, not missing assets.
+A requested band must have distinct lead guitar, rhythm guitar, bass and drums when
+those roles are requested; do not collapse them into vague background musicians.
+Carry these fixed designs to their active local commissions. No fictional Picture IDs.
+Do not put plot chronology,
+future events, the specified story outcome or the final shot into SETUP.
+Each local script must also identify its active actors by their bound <Picture N>.
+The clip's current state takes precedence over reference clothing after a change.
+Write each CLIP as a self-contained local shooting commission. Include only the
+reference identities, relevant location facts, vocal duties and hard rules needed
+for this interval, its opening state, visible events and required local end state.
+Carry completed consequences as current facts, not their backstory. Include both
+separate strands when assigned. Omit unused cast/locations and all later milestones,
+plot summaries, ending previews and reasons that depend on future events.
+The downstream director creatively stages and films this commission; it does not
+redistribute the whole story or choose this interval's singers from quoted lyrics.
+Use the supplied pictures for appearance, not a generic textual replacement of the asset.
+Deliver self-contained interval scripts with concrete actions and interactions, not
+plot summaries. Allocate by story and source timing, not mechanically by paragraph.
+Keep original <Picture N> numbers.
+Each brief states the actors actually present, their CURRENT look, location and props,
+and ONLY this interval's events and necessary changes. Carry state, never a history recap.
+Identity changes happen once in their assigned interval; subsequent briefs start in the
+resulting identity. Shared SETUP contains no plot chronology, future events or finale.
+Preserve the supplied backbone, causal order, explicit cue-bound events and outcome.
+Distinguish explicit required milestones and hard restrictions from optional
+staging suggestions. Carry the selected adaptation policy through all intervals.
+Parallel performance and story strands may intercut; no singer quota, mandatory cast
+attendance, shot list or complete dramatic arc per interval. Allocate a feasible amount
+of action to each duration. Respect local_srt cue timing and each interval's ending.
+Distribute the developed story across intervals, splitting a sequence when needed.
+Allocate opening, development and resolution across the available time; do not finish
+all events early and copy the finale to fill remaining slots. Each one-time event
+occurs once; later intervals continue from its consequence. A short tail sustains or
+completes the ending already underway, not another complete replay of the ending.
+Do not shorten it into generic beats or add unrelated plot. Do not add shot lists;
+retain special camera directions already supplied by the user with their events.
+Use the timeline ending phases when allocating the specified outcome. A resolving
+interval receives the actual local ending events, not a vague hint to end later.
+If only a short residual tail remains, the preceding full interval must complete
+the decisive action and establish the result; the tail continues that result.
+Do not hide the ending from the interval assigned to perform it.
+Use exactly these plain-text boundaries, every requested index, then END:
+=== SETUP ===
+Original fixed world, separate scene definitions, reference roles and singing assignments only.
+=== STORY OUTCOME ===
+Whole-work outcome for upstream planning only. Its events must also appear in their assigned CLIP commissions.
+=== CLIP 0 action ===
+Current situation and events for interval 0 only.
+=== CLIP 1 story ===
+Current situation and events for interval 1 only.
+=== END ===
+Use a supported primary mode in each CLIP header. No analysis or JSON."""
+
+
+def _pictures(originals):
+    from PIL import Image, ImageOps
+    parts=[]
+    for i,path in enumerate(originals,1):
+        with Image.open(path) as im:
+            im=ImageOps.exif_transpose(im).convert('RGB');im.thumbnail((768,768))
+            parts.extend([('text',f'<Picture {i}>:'),('image',im.copy())])
+    return parts
+
+
+def _text(raw):
+    if not isinstance(raw,str):raise SceneStateError('9B 需回傳文字。')
+    text=re.sub(r'<think>.*?</think>','',raw,flags=re.S).strip()
+    return re.sub(r'^```\w*\s*\n|\n```\s*$','',text).strip()
+
+
+def _bound(text,count):
+    return normalize_mv_prompt(map_image_mentions(text,count),count)
+
+
+def _check_distinct_events(rows):
+    # Catch copied long event blocks, not recurring short performance/ending holds.
+    seen={}
+    for row in rows:
+        event=re.sub(r'^\s*Mode:[^\n]*\n', '', row['event'], flags=re.I)
+        key=re.sub(r'\s+', '', event)
+        if len(key)<200:
+            continue
+        if key in seen:
+            raise SceneStateError(f"第 {row['index']+1} 段重複第 {seen[key]+1} 段的完整事件；請分配連續進展，勿複製事件填滿時長。")
+        seen[key]=row['index']
+
+
+def allocation_delivery(raw, expected_count, *, flexible=False):
+    """Read model-authored boundaries; VNext doesn't require cosmetic closing ===.
+
+    Preserve all event prose. No story repair or generated filler is performed.
+    The existing caller still pairs returned rows with the source intervals.
+    """
+    from banana_mv.story_plan import direct_delivery
+    text=_text(raw)
+    if not flexible:
+        setup=re.match(r'^===\s*SETUP\s*===\s*\n(.*?)(?=^===\s*(?:STORY OUTCOME\s*===|CLIP\s))',text,re.S|re.M)
+        if not setup:raise SceneStateError('分段大綱缺少 SETUP 共用設定。')
+        return setup[1].strip(),direct_delivery(text)
+    # Real 9B outputs may omit the right delimiter or the standalone END line.
+    # Neither spelling changes an explicitly numbered clip's content.
+    header=re.compile(r'^\s*===\s*CLIP\s+(\d+)\s+([a-z]+)\s*(?:===)?\s*$',re.M|re.I)
+    markers=list(header.finditer(text))
+    setup_header=re.search(r'^\s*===\s*SETUP\s*(?:===)?\s*$',text,re.M|re.I)
+    if not setup_header or not markers:
+        raise SceneStateError('回覆尚未提供可讀的共用設定與分段內容；原文已保存。')
+    setup_end=markers[0].start()
+    outcome=re.search(r'^\s*===\s*STORY OUTCOME\s*(?:===)?\s*$',text,re.M|re.I)
+    if outcome and setup_header.end()<outcome.start()<setup_end:setup_end=outcome.start()
+    shared=text[setup_header.end():setup_end].strip()
+    end=re.search(r'^\s*===\s*END\s*(?:===)?\s*$',text,re.M|re.I)
+    rows=[]
+    for i,marker in enumerate(markers):
+        stop=markers[i+1].start() if i+1<len(markers) else (end.start() if end and end.start()>marker.end() else len(text))
+        rows.append({'index':int(marker[1]),'mode':marker[2].lower(),'prompt':text[marker.end():stop].strip()})
+    if len(rows)!=expected_count or not shared or any(not r['prompt'] for r in rows):
+        raise SceneStateError(f'目前回覆未提供 {expected_count} 段可讀內容；原文已保存。')
+    return shared,{'segments':rows}
+
+
+def source_role_settings(brief, image_count):
+    """Conservatively retain explicit reference declarations and vocal-role clauses.
+
+    This is source text, not inferred cast or a new validation gate. Temporal plot
+    clauses stay in the upstream brief; never forward the complete story here.
+    """
+    text=map_image_mentions(brief,image_count)
+    kept=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line:continue
+        if re.match(r'^<Picture \d+>\s*[:：]',line):
+            # Reference declarations are retained only up to sentence boundaries.
+            clauses=re.split(r'(?<=[。.!?！？])\s*',line)
+        else:
+            clauses=re.split(r'(?<=[。.!?！？])\s*',line)
+        for clause in clauses:
+            if not clause:continue
+            temporal=re.search(r'最後|結尾|結局|隨後|之後|接著|最終|倒地|擊倒|\b(?:finally|then|afterward|ending|knockdown)\b',clause,re.I)
+            reference=re.match(r'^<Picture \d+>\s*[:：]',clause)
+            vocal=re.search(r'主唱|對嘴|演唱|不唱|不會唱|不負責唱|\b(?:vocalist|lead singer|lip.sync|does not sing|never sings)\b',clause,re.I)
+            if (reference or vocal) and not temporal:kept.append(clause)
+    return '\n'.join(dict.fromkeys(kept))
+
+
+VNEXT_ALLOCATION_SYSTEM = '''Prepare the COMPLETE music-video screenplay across the supplied timeline.
+Return the requested delivery directly, without analysis. Preserve user-required
+events, their causal order, vocal roles, reference identities, parallel locations,
+current appearances and ending. As screenwriter, actively complete a rough story spine into a vivid full screenplay: establish motivation, escalating conflict, physical interactions, emotional reactions, turning points, climax and resolution as appropriate to the genre. Invent connective events and original staging consistent with the brief; preserve all explicit user requirements. Develop it within its adaptation policy;
+retain the user's detailed actions when they are already supplied.
+User_role_declarations are verbatim source instructions, authoritative over invented
+staging. Carry their role and location scope faithfully into SETUP; a co-star is
+not a vocalist unless assigned. Use one stable cast/voice mapping throughout.
+SETUP contains invariant identity/reference mappings, locations and scene-specific
+singing duties only. SETUP is forwarded to every interval: describe only timeless facts, never prior actions, future actions, a story synopsis or an eventual outcome. Preserve separate locations as separate locations. Derive scene-specific singing duties from the user brief exactly; a singer role does not authorize singing during other activities. Supporting cast without images remains original cast; describe
+their fixed appearance without inventing a Picture. Put plot outcomes ONLY in
+STORY OUTCOME and in the clips where those outcomes actually occur.
+Each CLIP contains chronological event paragraphs, including opening state, action,
+reaction and outgoing state. Keep connected action phases together in one paragraph.
+Different events or returns to a parallel scene get separate paragraphs. Do not turn
+the script into camera instructions; retain explicit user camera requirements with
+their event. Use current states rather than retelling earlier completed events.
+Each CLIP is a continuous slice of ONE work, with enough present-state information
+to film it; it is NOT a self-contained miniature story. Only the commissioned
+opening introduces the work; only the assigned resolution performs the ending.
+A residual tail sustains the achieved result rather than replaying the resolution.
+Separate each commission in natural prose using Opening state:, New progression:,
+and Outgoing state:. These labels describe different meanings, not three acts.
+Opening state is already true when the interval starts; it is not an action to
+reenact. Assign a one-time milestone to one interval only. Following intervals
+inherit its achieved condition and develop consequences, not repeat its cause.
+If a character is already on the ground, continue from that position rather than
+standing them up to stage another defeat. Apply this principle to every genre.
+Exclude recaps and previews of other intervals. Missing labels do not invalidate
+an otherwise readable commission.
+Design adjacent boundaries together before delivering the complete allocation.
+Choose a motivated last shot and next first shot that carry audience momentum
+through the technical boundary. Continuity may come from movement, direction,
+rhythm, attention, composition, emotion, or deliberate contrast. Choose naturally
+from the story, not from a fixed recipe. The next view may switch subjects or
+locations; it need not finish the same physical action. Returning to a strand
+advances its current situation rather than resetting it.
+Within each CLIP, briefly express its own incoming visual/energy cue and outgoing
+visual/energy cue as local filming directions. Describe only what THIS clip shows
+or carries at its boundary, not another clip's story. These cues are not mandatory
+headers, fixed shot counts or additional events. Keep them outside shared SETUP.
+A shot may end at the boundary while dramatic momentum remains active; do not
+force a pause, farewell, victory pose or fade at every interval end.
+Include only this interval's source lyrics if quoting lyrics at all; supplied SRT
+already provides timing.
+Use the supplied ending context to budget preparation, decisive action, visible
+consequence and final reaction. Intermediate clips continue; the whole-work final
+stop is not a shared instruction or an ending for every clip.
+SRT and music evidence are fallible timing context, not mandatory edit points.
+Write concise English event paragraphs, preserving character names and original
+reference tokens. Deliver every timeline index, in order:
+=== SETUP ===
+Fixed identities, locations and scene-specific vocal roles.
+=== STORY OUTCOME ===
+The commissioned final result.
+=== CLIP 0 action ===
+Local events for interval zero.
+=== CLIP 1 story ===
+Local events for the next interval; continue for every requested index.
+=== END ===
+Use one supported primary mode in each header. Return the full screenplay once.'''
+
+
+def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
+    """Persist allocated scripts and fixed settings, without replanning per slot."""
+    contract=ending_contract(req,segments[-1]['start']+segments[-1]['seconds'],segments)
+    timeline=[]
+    for seg in segments:
+        timeline.append({k:seg[k] for k in ('index','start','seconds')} | {
+            'local_srt':excerpt(req,seg),'audio_evidence':seg.get('audio_evidence',{}),
+            'ending':clip_ending(req,dict(seg,direction_ending_contract=contract))})
+    task={'format':'isolated_shoot_briefs_v3',
+          'brief':map_image_mentions(req.get('prompt',''),len(originals)),
+          'user_role_declarations':source_role_settings(req.get('prompt',''),len(originals)),
+          'adaptation':'FREE' if req.get('story_plan',True) else 'FAITHFUL',
+          'style':req.get('director','auto'),'lyrics':req.get('lyrics',''),
+          'intensity':req.get('intensity','high'),'dynamic_cuts':req.get('dynamic_cuts',True),
+          'timeline':timeline,
+          'ending_contract':contract}
+    if not req.get('vnext_preproduction'):task.pop('user_role_declarations',None)
+    complete_story=req.get('project_scope','full')=='full'
+    fingerprint=digest(task)
+    # Old schema-5 jobs did not fingerprint the two directing controls.
+    old_task=dict(task,format='isolated_shoot_briefs_v1')
+    legacy_fingerprints={digest(dict(task,format='isolated_shoot_briefs_v2')),
+                             digest(old_task),digest({k:v for k,v in old_task.items()
+                               if k not in ('intensity','dynamic_cuts')})}
+    path=Path(work)/'director_plan.json'
+    if path.is_file():
+        plan=json.loads(path.read_text(encoding='utf-8'))
+        # Reuse intact plans saved by the removed v3 reviewer without rerunning it.
+        saved_requirements=plan.get('story_completion',{}).get('requirements')
+        if saved_requirements:
+            legacy_fingerprints.add(digest(dict(task,format='complete_story_shoot_briefs_v3',
+                required_story_events=saved_requirements,
+                story_scope='Complete this entire story within the uploaded audio duration, even if it is cropped or ends during a chorus.')))
+        if (plan.get('version')!=5 or plan.get('input_sha256') not in {fingerprint,*legacy_fingerprints} or
+            digest({k:v for k,v in plan.items() if k not in ('content_sha256','input_sha256')})!=plan.get('content_sha256')):
+            raise SceneStateError('分段拍攝大綱與專案不符或校驗失敗。')
+        return plan
+    parts=[('text',json.dumps(task,ensure_ascii=False))]+_pictures(originals)
+    system=((VNEXT_ALLOCATION_SYSTEM if req.get('vnext_preproduction') else ALLOCATION_SYSTEM)+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]+
+            '\nApply this intensity to filmable event development; leave shot selection to the clip director.\nSupported modes: '+
+            ', '.join(MODES)+f'. Deliver {len(segments)} CLIP blocks.')
+    if complete_story:
+        system+='\nCOMPLETE STORY SCOPE: Read the ENTIRE user brief before allocation. Budget opening, development, decisive resolution and final image over the ENTIRE available duration. Work backward from the mandatory ending, reserve enough room for it, then fit the middle. Compress optional staging rather than dropping required events or stopping at paragraph N. Musical section labels guide accents only; no outro is required to finish a story. For a very short tail, complete decisive events in the preceding full interval and sustain their result in the tail. If the complete request cannot fit, explicitly report that rather than delivering an incomplete story.'
+    if req.get('vnext_preproduction'):
+        from banana_mv.filming_review import SCENE_INSTANCE_POLICY
+        from banana_mv.lyrics_reference import OPTIONAL_TIMING_POLICY
+        system+='\n'+SCENE_INSTANCE_POLICY+'\n'+OPTIONAL_TIMING_POLICY
+    attempts=parts
+    # A formatting-only update can recover an existing response without a new 9B call.
+    recovered=None
+    if req.get('vnext_preproduction'):
+        for saved in sorted(Path(work).glob('director_attempt_*.json'),reverse=True):
+            try:
+                candidate=json.loads(saved.read_text(encoding='utf-8'))['raw_response']
+                allocation_delivery(candidate,len(segments),flexible=True)
+                recovered=candidate;break
+            except (ValueError,KeyError,TypeError):
+                continue
+    for attempt in range(rewrite_retry_count(req)+1):
+        raw=recovered if attempt==0 and recovered is not None else rewrite(cfg,system,attempts,uuid.uuid4().hex[:8])
+        try:
+            text=_text(raw)
+            shared,delivery=allocation_delivery(raw,len(segments),flexible=bool(req.get('vnext_preproduction')))
+            shared=_bound(shared,len(originals))
+            rows=delivery.get('segments')
+            if not isinstance(rows,list) or len(rows)!=len(segments):
+                raise SceneStateError(f'需交齊 {len(segments)} 段拍攝大綱。')
+            result=[]
+            for seg,row in zip(segments,rows):
+                if row.get('index')!=seg['index'] or row.get('mode') not in MODES:
+                    raise SceneStateError('分段大綱順序或模式錯誤。')
+                result.append({'index':seg['index'],'mode':row['mode'],'handoff_version':1,
+                               'event':_bound(row['prompt'],len(originals))})
+            _check_distinct_events(result)
+            outcome=re.search(r'^===\s*STORY OUTCOME\s*===\s*\n(.*?)(?=^===\s*CLIP\s)',text,re.S|re.M)
+            outcome_text=outcome[1].strip() if outcome else ''
+            if req.get('vnext_preproduction') and req.get('screenplay_review',True):
+                from banana_mv.screenplay_review import audit_and_repair
+                result,review=audit_and_repair(cfg,req,task,shared,outcome_text,
+                                               result,rewrite,work,originals)
+                _check_distinct_events(result)
+            plan={'version':5,'shared_setup':shared,'segments':result,'visual_verified':False,
+                  'ending_contract':task['ending_contract'],'project_scope':req.get('project_scope','full')}
+            if outcome:
+                # Upstream planning/audit only. Never included in fixed_reference_settings.
+                plan['story_outcome']=outcome_text
+            plan['content_sha256']=digest(plan);plan['input_sha256']=fingerprint
+            atomic_json(path,plan)
+            return plan
+        except ValueError as error:
+            diagnostic=Path(work)/f'director_attempt_{attempt:02d}.json'
+            if diagnostic.exists():diagnostic=Path(work)/f'director_attempt_{attempt:02d}_{uuid.uuid4().hex[:8]}.json'
+            atomic_json(diagnostic,
+                        {'raw_response':raw,'error':str(error)})
+            if attempt>=rewrite_retry_count(req):
+                raise SceneStateError('分段大綱交稿失敗：'+str(error)) from error
+            attempts=parts+[('text','Deliver the original fixed settings in SETUP and ALL CLIP scripts, then END. '
+                            'Keep the selected adaptation policy and photographic intensity while allocating the story backbone across the supplied intervals. '
+                            'Do not copy a complete event sequence into later slots. No analysis. Delivery error: '+str(error))]
+
+
+def _check_replayed_shots(shots):
+    """Reject unmistakable replay of a completed action across native shots.
+
+    Conservative by design: repeated actors, locations, lyrics and camera language
+    are normal; only long identical action phrases or repeated final audio stops
+    trigger a retry. This is not a semantic story verifier.
+    """
+    from collections import defaultdict
+    action=re.compile(r'\b(?:punch|jab|hook|uppercut|feint|slip|strike|hit|land|knock|stumble|fall|counter|duck|reel)(?:s|ed|ing)?\b',re.I)
+    endings=0
+    seen=defaultdict(set)
+    for index,description in enumerate(shots):
+        if re.search(r'\bhard[ -]stop\b',description,re.I):
+            endings+=1
+            if endings>1:
+                raise ValueError('最終音樂 HARD STOP 在不同鏡頭重複執行；請只保留一次結尾。')
+        # Compare uninterrupted original wording; camera/identity recaps alone
+        # cannot trigger the event replay gate.
+        words=re.findall(r"[a-z]+(?:'[a-z]+)?",description.lower())
+        for start in range(max(0,len(words)-15)):
+            chunk=words[start:start+16]
+            if len(chunk)<16 or not action.search(' '.join(chunk)):
+                continue
+            key=tuple(chunk)
+            if seen[key] and index not in seen[key]:
+                raise ValueError(f'分鏡 {index+1} 重演前面鏡頭已完成的攻防動作；保留新反應或後續進展，不要再次演同一動作。')
+            seen[key].add(index)
+
+
+def native_shot_replay_warning(prompt):
+    """Return a soft warning; never invalidate an otherwise renderable prompt."""
+    match=re.search(r'^\s*detailed_description\s*:(.*?)^\s*overall_soundscape\s*:',prompt,re.M|re.S)
+    if not match:
+        return None
+    body=match.group(1)
+    shots=list(re.finditer(r'\[Shot\s+\d+\]',body))
+    descriptions=[re.sub(r'^\s*At\s+\d{2}:\d{2}\.\d{3}\s*,?', '',
+        body[shot.end():(shots[i+1].start() if i+1<len(shots) else len(body))])
+        for i,shot in enumerate(shots)]
+    try:
+        _check_replayed_shots(descriptions)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
+def validate_native_mv_format(prompt, seconds, *, require_native=False):
+    """Check official Ref2VA shot timing and explicit speaker bindings, not story semantics.
+
+    Legacy prose-only outputs are accepted for saved/older workflows; native
+    six-section outputs receive deterministic structure and timeline checks.
+    """
+    from banana_mv.direction_contract import validate_h3_sections
+    if not require_native and not re.search(
+            r'^\s*(?:subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music)\s*:',prompt,re.M):
+        return prompt
+    validate_h3_sections(prompt)
+    if require_native:
+        retention=re.search(r'^\s*retention_analysis\s*:(.*?)^\s*detailed_description\s*:',prompt,re.M|re.S)[1]
+        if not re.search(r'<Audio 1>\s*:\s*fully_copy\b',retention):
+            raise ValueError('MV 原始音訊必須在 retention_analysis 保留 <Audio 1>: fully_copy。')
+    match=re.search(r'^\s*detailed_description\s*:(.*?)^\s*overall_soundscape\s*:',prompt,re.M|re.S)
+    if not match:
+        raise ValueError('Ref2VA 缺少詳細分鏡區塊。')
+    body=match.group(1).strip()
+    shots=list(re.finditer(r'\[Shot\s+(\d+)\]',body))
+    if not shots or len(shots)!=len(re.findall(r'\[Shot\b',body)):
+        raise ValueError('Ref2VA 詳細分鏡需使用 [Shot N]。')
+    previous=0.0
+    for i,shot in enumerate(shots):
+        if int(shot.group(1))!=i+1:
+            raise ValueError('分鏡必須從 [Shot 1] 開始連號。')
+        end=shots[i+1].start() if i+1<len(shots) else len(body)
+        description=body[shot.end():end]
+        timecode=re.match(r'\s*At\s+(\d{2}):(\d{2})\.(\d{3})\s*,?',description)
+        if i==0 and timecode:
+            raise ValueError('第一鏡 [Shot 1] 不需要切鏡時間碼。')
+        if i and not timecode:
+            raise ValueError(f'第 {i+1} 鏡需使用 At MM:SS.mmm。')
+        if timecode:
+            minute,second,millis=map(int,timecode.groups())
+            timestamp=minute*60+second+millis/1000
+            if second>=60 or not previous<timestamp<float(seconds):
+                raise ValueError(f'第 {i+1} 鏡時間碼必須遞增且小於 {seconds:g} 秒。')
+            previous=timestamp
+            description=description[timecode.end():]
+        if not description.strip():
+            raise ValueError(f'第 {i+1} 鏡缺少畫面描述。')
+    # H3 (S1)/(S2) represent global voices, including copied source-song voices.
+    # Do not require <d> or ban speaker markers: this is source-audio reuse.
+    speaker_to_subject={}
+    subject_to_speaker={}
+    for subject,speaker in re.findall(r'<Subject\s+(\d+)>\s*\(S(\d+)\)',prompt):
+        if ((speaker in speaker_to_subject and speaker_to_subject[speaker]!=subject) or
+            (subject in subject_to_speaker and subject_to_speaker[subject]!=speaker)):
+            raise ValueError('同一個 (Sx) 發聲者不可對應不同人物，人物發聲者 ID 亦不可變動。')
+        speaker_to_subject[speaker]=subject
+        subject_to_speaker[subject]=speaker
+    return prompt
+
+
+def write_shoot_prompt(cfg,req,segment,originals,tail,rewrite,progress=None):
+    """The first and only shot-writing stage; it cannot see the full story."""
+    row=segment['director_plan'];offset=int(bool(tail))
+    if row.get('handoff_version')!=1:
+        raise SceneStateError('舊大綱缺少獨立的當段拍攝委託；已保存影片與提示詞可沿用，但新寫稿需建立新任務重新分配。不能傳回完整設定補足。')
+    def connected(text):
+        # Only numbering changes for an actual keyframe. Never compact actor slots.
+        return re.sub(r'<Picture (\d+)>',lambda m:f'<Picture {int(m[1])+offset}>',text)
+    fixed_setup=segment.get('fixed_reference_settings','')
+    context={'seconds':segment['seconds'],'primary_mode':row['mode'],
+          'adaptation':'FREE' if req.get('story_plan',True) else 'FAITHFUL',
+          'local_srt':excerpt(req,segment),'audio_evidence':segment.get('audio_evidence',{}),
+          'ending':clip_ending(req,segment)}
+    if fixed_setup:context['fixed_reference_settings']=connected(fixed_setup)
+    if tail:context['first_frame']='<Picture 1> is the actual previous last frame, not another actor.'
+    guide=Path(cfg['guides']['ref']).read_text(encoding='utf-8')
+    system=NATIVE_ENHANCER_SYSTEM+guide
+    text=(f"Target video duration: {segment['seconds']:.6f} seconds.\n"
+          "Inspect the reference images labeled <Picture N> and use them according to the user's instructions.\n"
+          "Choose shots that best express the original intent. "
+          "Allocate shot durations and cut timing within the target duration according to content and pacing. "
+          "Respect explicit shot requests, reference constraints and the guide's transition rules.\n"
+          "Original prompt:\nCurrent clip script:\n"+connected(row['event'])+"\n\n")
+    text+="""Enhance this ONE clip script into the guide's final native H3 filming prompt,
+including its per-shot composition, lighting, actions and camera movement.
+When audio_evidence.music_structure is supplied, use its predicted local section
+changes and selected downbeats to motivate action payoffs, camera reveals and
+performance highlights. Write their timing into the shots, not an analysis appendix.
+Keep anticipation and contrast; do not cut on every beat. Labels can be wrong and
+do not identify instruments or override vocal roles. Use loudness only as acoustic evidence.
+The Current clip script is the authority for events, their causal order and the
+local end state. fixed_reference_settings supplies identities, appearances, locations
+and invariant performance rules only; it cannot authorize another plot event.
+If legacy fixed settings mention a whole-work outcome or final image, do not stage
+it unless this clip's commission explicitly assigns it. Neither a required eventual
+outcome nor an available prop makes it happen in this interval.
+Use the current clip's assigned beat and end state as the scope for visual development.
+Reach the commissioned local narrative state without acting out a closing beat:
+for continuing intervals, performance, movement, reactions and ongoing action
+remain in progress through the technical boundary; do not stage a pause, victory
+pose, reset, farewell, fade, or miniature ending to mark the clip's last second.
+A victory does not itself authorize an award ceremony or final gag. Do not add a future-event teaser shot. The interval
+explicitly assigned the resolution must still film it, including a preceding full
+interval assigned decisive events before a tiny residual tail. A first_frame is
+already visible continuity, not permission to invent the next plot milestone.
+Apply the adaptation policy below within that local scope. The commission supplies
+the needed current facts, opening state, events and local end state. Design compelling
+performance, coverage and montage to realize it. Use its assigned locations and asset roles;
+keep separate locations distinct, intercutting them rather than merging their sets or
+placing their casts in one shared frame. Select cast and supporting coverage to serve
+the current beat and adaptation policy, preserving fixed_reference_settings bindings.
+These settings identify assets, not a mandatory cast list. Never turn the singer
+into the challenger or substitute <Picture 1> for another named actor.
+Do not infer an actor's role from its apparent species, outfit or upload position.
+Local current-state changes override initial clothing/props while identity stays fixed.
+Available reference images do not require unused characters or locations to appear.
+Original supporting cast in fixed_reference_settings is equally available without a
+reference image. Use the same fixed design and instrument whenever that role returns.
+Do not reject it as "no such character", replace it with referenced cast, or omit a
+requested featured solo/hero shot merely because the performer has no uploaded photo.
+Use the actual reference appearance, not a generic version of its species or object type.
+Preserve current looks and props rather than resetting to
+reference clothing.
+All shot times are LOCAL and within the target duration; alignment
+padding adds no story time. Continue actions across cuts, without replaying the event.
+Use only connected pictures and <Audio 1>: fully_copy. The source audio is supplied to
+H3, not heard by you. Only the assigned vocalist may lip-sync. Add no new speech,
+lyrics, subtitles or a replacement song. Supplied SRT is timing evidence, not dialogue.
+Describe <Audio 1> only as the supplied unchanged source track; you have not heard it.
+Do not claim it contains a whistle, crowd, instruments, low energy or silence unless
+explicitly supported by the supplied evidence. Visible instruments are not heard evidence.
+For source-only delivery, overall_soundscape states source audio unchanged; do not
+invent an audible arena/stage ambience. non_diegetic_music identifies the supplied
+music track, not N/A. Optional external effects are mixed separately, not generated
+by this filming prompt. Their policy is sparse, event-motivated accents with music
+and lead vocals dominant; no continuous crowd bed, repetitive effects or invented dialogue.
+Keep microphone grip and free-hand gestures physically consistent.
+Follow the supplied whole-work ending scope; a continuing clip must not create
+its own ending, stopping pose or dramatic punctuation. A clip's last frame is
+just the next film interval's incoming state, not a cue to end the performance.
+For later clips, the first shot resumes the prior story/action line from its
+current consequence rather than reintroducing or restarting it. Preserve free
+music-video intercuts and parallel storylines: switching strands or camera
+angles does not reset the timeline of any strand.
+Return only the native filming prompt, no analysis, JSON or management instructions.
+"""
+    text+='\n'+adaptation_direction(req)
+    text+='\n'+REFERENCE_PERFORMANCE
+    text+='\n'+AUTO_FILMING
+    text+='\n'+(DYNAMIC_EDITING if req.get('dynamic_cuts',True) else
+                'Prefer motivated longer takes. Reveal changes through blocking, reframing or camera movement; do not force short-shot clusters.')
+    text+='\n'+CLIP_INTENSITY[req.get('intensity','high')]
+    if req.get('face_identity',True):text+='\nPreserve the assigned reference identities through motion and expressions.'
+    text+='\nWhen a permitted singer appears, prefer waist-up or closer for clear lip sync.'
+    text+='\n\nClip timing and audio context:\n'+json.dumps(context,ensure_ascii=False)
+    refs=([tail] if tail else [])+list(originals)
+    parts=[('text',text)]+_pictures(refs)
+    attempts=parts;segment['director_mode']=row['mode']
+    for attempt in range(rewrite_retry_count(req)+1):
+        if progress:progress({'stage':'rewriting','clip_index':segment['index'],
+                              'attempt':attempt+1,'max_attempts':rewrite_retry_count(req)+1})
+        segment['prompt_profile']={'source':'isolated_native_director','writer_calls':attempt+1,
+                                   'contract_check_calls':0}
+        raw=rewrite(cfg,system,attempts,uuid.uuid4().hex[:8])
+        try:
+            prompt=validate_native_mv_format(normalize_mv_prompt(_text(raw),len(refs)),segment['seconds'],
+                require_native=req.get('h3_validation_version')==1)
+            if len(originals)>1 and not re.search(r'<Picture \d+>',prompt):
+                raise SceneStateError('多圖拍攝稿缺少原始圖片綁定。')
+            return prompt
+        except ValueError as error:
+            if attempt>=rewrite_retry_count(req):
+                raise SceneStateError('當段拍攝稿交稿失敗：'+str(error)) from error
+            attempts=parts+[('text','Return only the current native H3 prompt. Fix H3 native formatting, shot timing or connected media only: '+str(error))]
+
+
+
