@@ -152,7 +152,7 @@ lyrics and visible text in their original language. Use clip-local cut times.
 
 def prepare(cfg,job,originals,work,rewrite):
     """Complete every native director prompt before the existing render loop."""
-    from banana_mv.shoot_plan import validate_native_mv_format, source_role_settings
+    from banana_mv.shoot_plan import validate_native_mv_format, source_role_settings, native_shot_replay_warning
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     ready=folder/'ready.json'
     if ready.is_file():return
@@ -183,6 +183,16 @@ def prepare(cfg,job,originals,work,rewrite):
             (folder/f'director_{seg["index"]:02d}_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
             try:
                 text=validate_native_mv_format(normalize_mv_prompt(_text(raw),len(originals)),seg['seconds'],require_native=req.get('h3_validation_version')==1)
+                warning=native_shot_replay_warning(text)
+                if warning:
+                    atomic_json(folder/f'{seg["index"]:02d}_replay_warning.json',
+                                {'attempt':attempt+1,'warning':warning,'auto_retry':attempt<rewrite_retry_count(req)})
+                    if attempt<rewrite_retry_count(req):
+                        parts=[('text',json.dumps(payload,ensure_ascii=False)+
+                               '\nThe previous draft passed format checks but repeated a completed event: '+warning+
+                               '\nRewrite this interval cleanly. Keep each action once, progress through shots, preserve the commissioned outcome and original audio.')]+_pictures(originals)
+                        continue
+                # A semantic warning never blocks a renderable draft after retries.
                 break
             except ValueError as error:
                 if attempt==rewrite_retry_count(req):raise
