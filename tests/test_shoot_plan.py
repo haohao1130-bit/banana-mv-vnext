@@ -37,7 +37,7 @@ class ShootPlanTests(unittest.TestCase):
         guide=root/'guide.md';guide.write_text('OFFICIAL_NATIVE_GUIDE_MARKER')
         cfg={'guides':{'ref':str(guide)},'comfy_input_dir':str(root)}
         req=request(director_schema=5,scene_state_version=0,prompt_compiler_version=0,
-                    project_scope='full',mode=mode,rewrite_retries=0,
+                    project_scope='full',mode=mode,rewrite_retries=0,screenplay_review=False,
                     prompt='PRIVATE_FULL_STORY with FUTURE_STORY_MARKER',
                     lyrics='WHOLE_SONG_LYRIC_MARKER',srt_cues=[
                         {'start':.5,'end':1.5,'text':'OPENING_CUE'},
