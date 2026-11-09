@@ -433,12 +433,18 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
                 result.append({'index':seg['index'],'mode':row['mode'],'handoff_version':1,
                                'event':_bound(row['prompt'],len(originals))})
             _check_distinct_events(result)
+            outcome=re.search(r'^===\s*STORY OUTCOME\s*===\s*\n(.*?)(?=^===\s*CLIP\s)',text,re.S|re.M)
+            outcome_text=outcome[1].strip() if outcome else ''
+            if req.get('vnext_preproduction') and req.get('screenplay_review',True):
+                from banana_mv.screenplay_review import audit_and_repair
+                result,review=audit_and_repair(cfg,req,task,shared,outcome_text,
+                                               result,rewrite,work,originals)
+                _check_distinct_events(result)
             plan={'version':5,'shared_setup':shared,'segments':result,'visual_verified':False,
                   'ending_contract':task['ending_contract'],'project_scope':req.get('project_scope','full')}
-            outcome=re.search(r'^===\s*STORY OUTCOME\s*===\s*\n(.*?)(?=^===\s*CLIP\s)',text,re.S|re.M)
             if outcome:
                 # Upstream planning/audit only. Never included in fixed_reference_settings.
-                plan['story_outcome']=outcome[1].strip()
+                plan['story_outcome']=outcome_text
             plan['content_sha256']=digest(plan);plan['input_sha256']=fingerprint
             atomic_json(path,plan)
             return plan
