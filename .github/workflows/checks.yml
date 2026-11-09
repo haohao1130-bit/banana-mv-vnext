@@ -5,6 +5,8 @@ permissions:
 jobs:
   offline:
     runs-on: ubuntu-latest
+    env:
+      BANANA_DATA: /tmp/banana-mv-vnext-checks
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
