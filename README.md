@@ -1,51 +1,51 @@
-# Banana MV VNext
+# Banana MV VNext｜大乘蕉宗煉丹房
 
-Independent whole-song preproduction prototype. The legacy MV and Film repositories are unchanged.
+沿用原本一鍵 MV 的前端、Colab 安裝、H3 原曲鎖定、分段、音訊裁切、合成、素材、版本與補拍機制。只把攝影與拍攝稿準備移到開拍之前。
 
-Flow: one complete screenplay → one camera-only plan → deterministic six-section H3 prompt compilation → sealed project. No per-render story rewrite.
+[開啟測試版 Colab](https://colab.research.google.com/github/haohao1130-bit/banana-mv-vnext/blob/feature/whole-song-preproduction/Banana_MV_Public.ipynb)
 
-## Current delivery
+目前仍是測試分支，不代表已通過真實 9B 或 H3 GPU 驗收。
 
-- Standard-library Python core and offline replay CLI; no model or GPU dependency.
-- Exact 24fps source timeline, stable ordered reference slots and explicit source-vocal bindings.
-- Camera fields are enums. Added narrative keys, omitted clips and invalid cut timing fail closed.
-- Source song, reference order, screenplay, camera and prompts are hashed. `inspect` also recompiles prompts against the authoritative plan.
-- Existing project directories are preserved. Invalid responses retain raw diagnostics and never create `ready.json`.
+## 製片順序
 
-This is preproduction infrastructure, not a usable Colab generation app yet. It does not claim real 9B/H3 quality or official parser acceptance. The six-section format follows the existing MV integration conventions and still requires native-node validation.
+1. 原本音樂分析及全曲故事分配。
+2. 一次請本地 9B 準備全曲攝影決策。傳入完整已分配故事、參考圖、原本 SRT 和音樂分析，攝影不負責改寫事件。
+3. Python 將原本事件文字與攝影決策組合成全部 H3 六區塊提示詞，保存到專案 `preproduction/`。全部完成後才保存 ready 標記。
+4. 原本的丹方審閱與開爐操作。沒有新增確認步驟。
+5. 原本 worker 按保存稿生成、裁切、合成原曲。這個拍攝迴圈不再呼叫 9B；中斷後沿用保存稿和已完成片段。
 
-## Offline use
+關閉 9B 時保留原本直接提示詞路徑。已保存舊任務沒有新流程標記時繼續走原本流程。
 
-```
+## 保留的功能
+
+九格圖片與 @圖片、原創無參考圖配角、原曲時長、15 秒分段與原本模型影格對齊、SRT、音樂分析、480p/720p、獨立或單張末幀接續、模型與採樣設定、原曲 lock_source、選填音效合成、停止與續跑、局部修稿、補拍候選、選丹與凝丹，均沿用來源程式。
+
+前端沿用原本 HTML/JS，只更新備稿進度文字。不是另一套新 UI。
+
+本輪沒有加入劇情評分、語意審查、固定鏡頭數、角色必須有照片、345 影格上限或禁用特定故事文字等額外限制。攝影 JSON 只檢查能否對應各段和切鏡時間。原程式已有的檢查保留。
+
+## 五幀接續
+
+它屬於下游生成的動作引導，不是重寫故事的輸入。本輪沿用 MV 原本的單張末幀接續；沒有把 Film Ref2VA 的五幀圖接到 MV 的 T8 原曲鎖定節點。若新增五幀模式，需另驗圖像引導與音訊重疊/裁切，保持原曲時間軸，不能宣稱此版已有。
+
+## 來源與隔離
+
+程式基底：`haohao1130-bit/banana-mv-public@50da64510fc827e80e3fc44a9dcf38ce11a6dd6f`。
+
+舊 MV / Film 倉庫未修改。新入口下載本倉庫測試分支；專案使用 `MyDrive/BananaMVVNext`，不混入原本 `BananaMV` 的專案。模型/ComfyUI 安裝流程沿用。
+
+首輪獨立的 `mvnext/` 原型及其額外限制已移除，不在正式入口執行。
+
+## 測試與限制
+
+```sh
 python -m unittest discover -s tests -v
-python -m mvnext prepare --project projects/demo --story story.txt --song song.wav --song-frames 720 --picture actor.png --screenplay screenplay.json --camera camera.json
-python -m mvnext inspect --project projects/demo --song song.wav --picture actor.png
+node tests/check_ui.cjs
+node tests/check_asset_reuse.cjs
 ```
 
-The CLI replays supplied model-response JSON files; it does not contact a model. `song-frames` must eventually come from verified decoded audio duration. Currently the caller supplies it. Source assets are hashed as bytes; valid image/audio decoding is pending.
+沿用來源的離線測試，另加真實 worker 呼叫順序、全稿完成後才 queue、審閱前不 queue、中斷續跑零額外 9B、原創配角/15 秒保留等回歸。測試中的 9B/GPU 是替身，不代表成片品質。
 
-## Screenplay contract
+攝影欄位使用自由文字，不做語意審查；模型仍可能不遵守攝影專職指令。原故事事件會由 Python 原文插入，攝影文字的實際忠實度仍需真實輸出審閱。
 
-Root: `title`, `subjects`, `clips` only.
-
-- Subject: `id` positive integer, `name`, `picture` 1-based upload slot, `appearance`, `voice` positive source-voice ID or null. This first slice requires referenced cast; original supporting cast and multiple roles per image need a later explicit contract.
-- Clip: sequential 0-based `index`, contiguous `start_frame`, `frames`, `opening`, `outgoing`, `beats`.
-- Beat: globally unique `id`, strictly increasing local `at_frame`, `action`, `singer` subject ID or null. Source lyrics are not generated dialogue.
-- All frames sum exactly to source song frames. Clips are at most 345 delivered frames; nonfinal windows at least 124. Render padding and five-frame guide lengths are not implemented here.
-- Narrative fields are single-line text and cannot inject H3 tags or section/shot syntax. The original user story may contain multiple lines.
-
-Camera root: `clips`. Each clip has `index`, `shots`; each shot has `at_frame`, `size`, `angle`, `motion`. First shot starts at zero. See `CAMERA` in `mvnext/pipeline.py` for supported enums. No narrative fallback or silent timing repair is performed.
-
-The model interface is `model(role, payload)`. A live adapter must supply the full schema, original story, verified timing, SRT/vocal assignments and actual image references. This prototype's payloads and replay interface are not a production 9B prompt yet.
-
-## Next acceptance gates
-
-1. Human screenplay approval plus persistent revision identity; structural validation does not prove faithful story interpretation.
-2. Live 9B adapter with full schemas, source timing/SRT, vocal roles and picture inputs. Bound retries while retaining raw attempts.
-3. Verify actual native H3 graph, source-audio lock and legal render/prefix frames before GPU work.
-4. A 30-second real sample covering singing and action, cross-clip continuity, audio sync and interrupt/resume.
-5. Frontend, retake versions and explicit adoption. Rendering must consume sealed prompts without writer calls.
-
-## Source review
-
-Design reviewed against Film VNext `7df237c5f2a74ff6de0465a67142fe5f487c6b73` and legacy MV official-format changes `615c104d40e7e9508ca719e7d479461b0832270e` / `ff3010216fccbca8d4d41362b8d15b3f48c95288`. No runtime code or private media was copied. Hashes detect accidental changes, not hostile replacement of an entire manifest.
+參見來源保留的 [操作說明](docs/user_manual.md)；該文件記錄原版功能，製片順序與資料目錄以本頁為準。
