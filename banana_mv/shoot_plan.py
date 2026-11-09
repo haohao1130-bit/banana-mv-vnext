@@ -491,12 +491,12 @@ def _check_replayed_shots(shots):
 
 def native_shot_replay_warning(prompt):
     """Return a soft warning; never invalidate an otherwise renderable prompt."""
-    match=re.search(r'^\\s*detailed_description\\s*:(.*?)^\\s*overall_soundscape\\s*:',prompt,re.M|re.S)
+    match=re.search(r'^\s*detailed_description\s*:(.*?)^\s*overall_soundscape\s*:',prompt,re.M|re.S)
     if not match:
         return None
     body=match.group(1)
-    shots=list(re.finditer(r'\\[Shot\\s+\\d+\\]',body))
-    descriptions=[re.sub(r'^\\s*At\\s+\\d{2}:\\d{2}\\.\\d{3}\\s*,?', '',
+    shots=list(re.finditer(r'\[Shot\s+\d+\]',body))
+    descriptions=[re.sub(r'^\s*At\s+\d{2}:\d{2}\.\d{3}\s*,?', '',
         body[shot.end():(shots[i+1].start() if i+1<len(shots) else len(body))])
         for i,shot in enumerate(shots)]
     try:
