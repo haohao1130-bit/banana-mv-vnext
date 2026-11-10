@@ -219,6 +219,20 @@ async function submit(){uploads.length=0;await els.form.onsubmit({preventDefault
   assert.equal(els['event-plan-details'].hidden,true);
   vm.runInContext("renderEventPlan({status:'done',segments:[{index:0,director_plan:{mode:'story',event:'one copy'}}]})",context);
   assert.equal(els['event-plan-details'].hidden,false);
+  // A ready recipe can have a running advisory task: the master reads, not fires.
+  vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'running'}});renderProgress({status:'plan_ready',recipe_advice:{status:'running'}})",context);
+  assert.equal(els.furnace['data-phase'],'review');
+  assert.equal(els.furnace['data-state'],'advising');
+  assert.equal(els['furnace-title'].textContent,'蕉大師正在參詳丹方');
+  assert.equal(els['master-caption'].textContent,'蕉大師參詳丹方');
+  assert.equal(els['current-activity'].hidden,false);
+  assert(els['progress-label'].textContent.includes('原稿保留'));
+  vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'advice_only'}});renderProgress({status:'plan_ready',segments:[]})",context);
+  assert.equal(els.furnace['data-phase'],'ready');
+  assert.equal(els['current-activity'].hidden,true);
+  assert.equal(els['master-caption'].textContent,'蕉大師運功');
+  vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'error'}})",context);
+  assert.equal(els.furnace['data-phase'],'ready');
   console.log('UI checks passed: image mentions with thumbnails, caret insertion, keyboard/IME, fixed slots, saved references, chain limits, prompt review and retakes.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 
