@@ -737,6 +737,79 @@ def request_recipe_advice(job_id, instruction=''):
         GPU_LOCK.release();raise
 
 
+
+def request_recipe_revision(job_id):
+    """Prepare a candidate in the background; official recipe stays untouched."""
+    if not GPU_LOCK.acquire(blocking=False):
+        raise ValueError('其他模型工作正在執行，請稍後產生修訂版。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready' or not job['request'].get('plan_review'):
+            raise ValueError('只有待確認的丹方可以依建議修訂。')
+        advice=job.get('recipe_advice') or {}
+        if advice.get('status')!='advice_only' or not advice.get('issues'):
+            raise ValueError('請先讓蕉大師提供具體修改建議。')
+        revision=plan_revision(job)
+        if job.get('plan_revision')!=revision:
+            raise ValueError('原丹方已變更，請重新開啟專案核對。')
+        cfg=copy.deepcopy(backend.load_config())
+        job['recipe_revision']={'status':'running','base_revision':revision}
+        write_state(job)
+        def run():
+            try:
+                from banana_mv.recipe_revision import draft
+                result=draft(job_dir(job_id),job,cfg,backend.rewrite_local,
+                             advice,revision)
+            except Exception as exc:
+                result={'status':'error','error':str(exc),'recipe_changed':False}
+            finally:
+                try:
+                    latest=read_state(job_id)
+                    if latest.get('recipe_revision',{}).get('base_revision')==revision:
+                        latest['recipe_revision']=result
+                        write_state(latest)
+                finally:
+                    GPU_LOCK.release()
+        threading.Thread(target=run,daemon=True).start()
+        return job
+    except Exception:
+        GPU_LOCK.release()
+        raise
+
+
+def accept_recipe_revision(job_id, revision):
+    """Explicit commit only after stable manuscript & plan-revision checks."""
+    if not GPU_LOCK.acquire(blocking=False):
+        raise ValueError('目前有模型工作執行中，稍後再採用修訂版。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready' or not job['request'].get('plan_review'):
+            raise ValueError('丹方已開爐或不在審閱狀態，不能替換。')
+        from banana_mv.recipe_revision import accept
+        return accept(job_dir(job_id),job,revision,write_state,plan_revision)
+    finally:
+        GPU_LOCK.release()
+
+
+def discard_recipe_revision(job_id, revision):
+    """Keep approved original unchanged; candidate remains archived separately."""
+    if not GPU_LOCK.acquire(blocking=False):
+        raise ValueError('修訂工作尚未完成，無法保留原稿。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready':
+            raise ValueError('目前不是丹方審閱狀態。')
+        state=job.get('recipe_revision') or {}
+        if state.get('status')!='ready' or state.get('id')!=revision:
+            raise ValueError('修訂版已失效。')
+        job['recipe_revision']={'status':'discarded','id':revision,
+                                'recipe_changed':False,
+                                'message':'原丹方與原 H3 咒語保留，修訂版未採用。'}
+        write_state(job)
+        return job
+    finally:
+        GPU_LOCK.release()
+
 def open_furnace(job_id,revision):
     """Approve an existing plan once; reuse its exact allocation without replanning."""
     if not GPU_LOCK.acquire(blocking=False):raise ValueError('已有 MV 工作執行中，請稍後開爐。')
@@ -1025,6 +1098,15 @@ class Handler(WebHandler):
             if path=='/api/mv/recipe-advice':
                 body=self.body_json()
                 return self.send_json(request_recipe_advice(body['id'],body.get('instruction','')))
+            if path=='/api/mv/recipe-revise':
+                body=self.body_json()
+                return self.send_json(request_recipe_revision(body['id']))
+            if path=='/api/mv/recipe-accept':
+                body=self.body_json()
+                return self.send_json(accept_recipe_revision(body['id'],body.get('revision')))
+            if path=='/api/mv/recipe-keep':
+                body=self.body_json()
+                return self.send_json(discard_recipe_revision(body['id'],body.get('revision')))
             if path=='/api/mv/open-furnace':
                 body=self.body_json()
                 return self.send_json(open_furnace(body['id'],body.get('revision')))
