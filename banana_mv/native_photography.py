@@ -77,19 +77,6 @@ def _delivered_cuts(text):
     return times
 
 
-def _focused_guide(guide):
-    """Extract the official camera/shot-writing portion, not the huge task manual.
-
-    The complete guide is retained on disk. Only its concise relevant excerpt
-    is supplied to the camera-only call to prevent 9B role overload.
-    """
-    chunks=re.split(r'(?=^## [0-9]+\.)',guide,flags=re.M)
-    focused=[x for x in chunks if re.match(r'^## (?:1|5)\.',x)]
-    if focused:
-        return '\n'.join(focused)[:5800]
-    return guide[:1600]
-
-
 def _verify(text, seconds, required, expected_refs):
     validate_native_mv_format(text,seconds,require_native=True)
     delivered=_delivered_cuts(text)
@@ -138,10 +125,10 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
                 return _verify(cached['prompt'],seg['seconds'],required,expected_refs),None
         except (ValueError,KeyError,TypeError,OSError):
             pass
-    guide=_focused_guide(guide_text)
-    # Restore the OLD specialist CAMERA ROLE, not the old oversized prompt.
-    # One local passage plus focused official shot guidance; no full story.
-    system=(NATIVE_ENHANCER_SYSTEM+guide+'\n'+NATIVE_FILMING_CONTRACT+
+    # Restore the FULL official H3 filming guide, but only to the local
+    # camera-director call. The 9B does NOT receive the whole-song brief here.
+    # Do not silently truncate the camera guide: that was the regression.
+    system=(NATIVE_ENHANCER_SYSTEM+guide_text+'\n'+NATIVE_FILMING_CONTRACT+
         '\nNative output sections, in order: subject_definitions, summary, '
         'retention_analysis, detailed_description, overall_soundscape, '
         'non_diegetic_music. Keep <Audio 1>: fully_copy.')
