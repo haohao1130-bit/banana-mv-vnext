@@ -97,5 +97,41 @@ class ChainedFilmTests(unittest.TestCase):
             self.assertTrue((root/'preproduction/whole_film_chapter_01.json').is_file())
 
 
+    def test_surplus_chapter_beats_are_safely_clipped_not_fatal(self):
+        spine=_validated_spine(script(),DURATION)
+        raw={'beats':[beat(30000,'s3','At the chapter boundary.'),
+                      beat(0,'s1','Valid opening event.'),
+                      beat(10000,'s2','Valid chapter development.'),
+                      beat(10000,'s2','Accidental duplicate event.'),
+                      beat(32000,'s4','Beyond the chapter, drop this.')],
+             'exit_state':{'location':'railing','pose':'moving'}}
+        piece=_validated_chapter(raw,spine,spine['chapters'][0])
+        self.assertEqual([b['at_ms'] for b in piece['beats']],[0,10000,29999])
+        self.assertEqual(piece['beats'][-1]['action'],'At the chapter boundary.')
+        self.assertEqual(len(raw['beats']),5)  # original model response is untouched
+
+    def test_micro_chapters_are_rebinned_to_requested_segment_edges(self):
+        from banana_mv.whole_film import _chapter_boundaries
+        segments=[{'index':i,'start':float(i*10),
+                   'seconds':10.0 if i<5 else 8.5} for i in range(6)]
+        edges=_chapter_boundaries(segments,DURATION)
+        self.assertEqual(edges,[0,10000,20000,30000,40000,50000,58500])
+        raw={'subject_definitions':script()['subject_definitions'],
+             'chapters':[chapter(0,3600,'Opening at 3.6 seconds.'),
+                         chapter(3600,7300,'The first reaction.'),
+                         chapter(7300,15000,'Consequences follow.'),
+                         chapter(15000,35000,'Chorus develops.'),
+                         chapter(35000,DURATION,'Resolve at song end.')]}
+        aligned=_validated_spine(raw,DURATION,edges)
+        self.assertEqual([(c['start_ms'],c['end_ms']) for c in aligned['chapters']],
+                         list(zip(edges,edges[1:])))
+        self.assertIn('Opening at 3.6 seconds.',aligned['chapters'][0]['goal'])
+        self.assertIn('The first reaction.',aligned['chapters'][0]['goal'])
+        self.assertIn('Resolve at song end.',aligned['chapters'][-1]['goal'])
+        self.assertEqual(aligned['chapters'][0]['start_ms'],0)
+        self.assertEqual(aligned['chapters'][-1]['end_ms'],DURATION)
+
+
+
 if __name__=='__main__':
     unittest.main()
