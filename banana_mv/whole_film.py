@@ -140,7 +140,7 @@ def photography_system(cfg):
     # Keep tiny custom guide notes for existing installations and fixtures.
     guide_path=cfg.get('guides',{}).get('ref')
     guide=Path(guide_path).read_text(encoding='utf-8') if guide_path and Path(guide_path).is_file() else ''
-    tiny_note=('\nInstallation note: '+guide) if 0<len(guide)<=256 else ''
+    tiny_note=('\nInstallation note: '+guide) if 0<len(guide)<=256 and not re.search(r'^## \d+\.',guide,re.M) else ''
     return COMPACT_H3_DIRECTOR_GUIDE+tiny_note+'\n'+PHOTOGRAPHY+'''
 FINAL DELIVERY CONTRACT: Return ONLY the JSON object with subject_definitions
 and beats. Every timed view belongs in beats. Never enumerate Shot appearances
