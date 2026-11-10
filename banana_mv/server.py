@@ -589,6 +589,7 @@ def start(req):
              vnext_preproduction=req.get('rewrite',True),
              whole_film_version=1 if req.get('rewrite',True) else 0,
              director_authority=bool(req.get('story_plan',True) and req.get('rewrite',True)),
+             native_camera_version=1,  # New jobs restore actual H3 shot-direction pass
              mv_motion_version=2,
              kitchen_attention=req.get('kitchen_attention',req.get('acceleration',True)),
              sparse_attention=req.get('sparse_attention',req.get('acceleration',False)))
