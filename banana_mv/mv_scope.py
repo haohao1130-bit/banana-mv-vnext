@@ -54,12 +54,18 @@ def continuous_film_ending_contract(req, total):
         return ending_contract(req, total)
     if not math.isfinite(total) or total <= 0:
         raise ValueError('Whole-film duration must be positive and finite.')
+    # Optional explicit hold: never force one on every song or move the climax
+    # just because the H3 render is technically segmented.
+    hold=req.get('final_hold_seconds',0)
+    if isinstance(hold,bool) or not isinstance(hold,(int,float)) or not math.isfinite(hold) or not 0<=hold<total:
+        raise ValueError('final_hold_seconds must be finite, nonnegative and shorter than the song.')
+    settle_by=total-hold
     return {
         'project_scope': 'full', 'finish_work': True,
         'finale_policy': 'source_duration_v2',
-        'resolve_start_by': round(total, 6),
-        'settle_by': round(total, 6), 'end_time': round(total, 6),
-        'short_tail_seconds': 0, 'hold_seconds': 0,
+        'resolve_start_by': round(settle_by, 6),
+        'settle_by': round(settle_by, 6), 'end_time': round(total, 6),
+        'short_tail_seconds': 0, 'hold_seconds': round(hold, 6),
         'instruction': (
             'The complete song is the only timing boundary. Develop the entire '
             'requested film across its source timeline, including every explicit '
@@ -67,7 +73,7 @@ def continuous_film_ending_contract(req, total):
             'finale and last lyric timing take precedence. Finish the requested '
             'result by the source end; do not create an artificial hold, move a '
             'climax earlier, or resolve a story at each technical clip boundary. '
-            'The final beat may show active action if the brief requires it. '
+            'The final beat may show active action if the brief requires it. Any explicit final_hold_seconds reserves only the user's requested final image interval, not a generic hero pose. '
             'Never extend, fade or replace the source song.'
         ),
     }
