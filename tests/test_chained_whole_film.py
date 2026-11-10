@@ -106,8 +106,10 @@ class ChainedFilmTests(unittest.TestCase):
                       beat(32000,'s4','Beyond the chapter, drop this.')],
              'exit_state':{'location':'railing','pose':'moving'}}
         piece=_validated_chapter(raw,spine,spine['chapters'][0])
-        self.assertEqual([b['at_ms'] for b in piece['beats']],[0,10000,29999])
-        self.assertEqual(piece['beats'][-1]['action'],'At the chapter boundary.')
+        self.assertEqual([b['at_ms'] for b in piece['beats']],[0,10000])
+        self.assertEqual(piece['beats'][-1]['action'],'Valid chapter development.')
+        self.assertEqual(piece['exit_state']['chapter_end_ms'],30000)
+        self.assertEqual(piece['exit_state']['chapter_exit_target'],spine['chapters'][0]['exit_target'])
         self.assertEqual(len(raw['beats']),5)  # original model response is untouched
 
     def test_micro_chapters_are_rebinned_to_requested_segment_edges(self):
@@ -131,6 +133,77 @@ class ChainedFilmTests(unittest.TestCase):
         self.assertEqual(aligned['chapters'][0]['start_ms'],0)
         self.assertEqual(aligned['chapters'][-1]['end_ms'],DURATION)
 
+
+
+    def test_boolean_ongoing_is_normalized_without_rejecting_valid_json(self):
+        spine=_validated_spine(script(),DURATION)
+        first=beat(0,'s1','The performer begins the exchange.')
+        second=beat(11000,'s2','The performer sidesteps.')
+        first['ongoing']=True
+        second['ongoing']=False
+        output=_validated_chapter({'beats':[first,second],
+                                   'exit_state':{'pose':'moving'}},
+                                  spine,spine['chapters'][0])
+        self.assertEqual(output['beats'][0]['ongoing'],first['action'])
+        self.assertEqual(output['beats'][1]['ongoing'],second['action'])
+        self.assertIs(first['ongoing'],True)  # leave the raw model data intact
+
+    def test_real_9b_spill_does_not_leak_song_finale_as_chapter_handoff(self):
+        spine=_validated_spine(script(),DURATION)
+        first=beat(0,'A','The opening jab begins.')
+        second=beat(10000,'A','The defense resets.')
+        future=beat(54500,'A','The ending knockout lands.')
+        for b in (first,second,future):
+            b['ongoing']=True
+        output=_validated_chapter({'beats':[first,second,future],
+                                   'exit_state':'The ending knockout lands.'},
+                                  spine,spine['chapters'][0])
+        self.assertEqual([b['at_ms'] for b in output['beats']],[0,10000])
+        self.assertNotIn('knockout',json.dumps(output['exit_state']))
+        self.assertEqual(output['exit_state']['last_visible_state'],
+                         second['continuation_state'])
+
+    def test_chapter_prompt_isolates_first_15_seconds_from_final_lyric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req.update(authoring_mode='chained',screenplay_review=False,
+                       prompt='Opening fight. Save the FINAL VICTORY for the end.',
+                       srt_cues=[{'start':0.34,'end':2.9,'text':'Opening jab'},
+                                 {'start':13.68,'end':16.08,'text':'Boundary crossing'},
+                                 {'start':54.5,'end':56.58,'text':'FINAL VICTORY LYRIC'}])
+            segments=[{'index':i,'start':float(i*15),
+                       'seconds':15.0 if i<3 else 13.5} for i in range(4)]
+            macro={'subject_definitions':script()['subject_definitions'],
+                   'chapters':[chapter(0,15000,'Establish the opening.'),
+                               chapter(15000,30000,'Make the defense adapt.'),
+                               chapter(30000,45000,'Increase the pressure.'),
+                               chapter(45000,DURATION,'Resolve at the end.')]}
+            pieces=[{'beats':[beat(start,'s1','Advance this chapter.')],
+                     'exit_state':{'pose':'in progress'}}
+                    for start in (0,15000,30000,45000)]
+            writer=Mock(side_effect=[json.dumps(macro)]+[json.dumps(p) for p in pieces])
+            ensure_film(cfg,req,segments,images,root,writer)
+            payload=json.loads(writer.call_args_list[1].args[2][0][1])
+            self.assertEqual(payload['chapter']['start_ms'],0)
+            self.assertEqual(payload['chapter']['end_ms'],15000)
+            self.assertNotIn('brief',payload['source'])
+            self.assertNotIn('lyrics',payload['source'])
+            self.assertNotIn('reference_brief',payload['source'])
+            self.assertNotIn('ending',payload['source'])
+            self.assertEqual(len(payload['spine']['chapters']),1)
+            self.assertEqual([c['text'] for c in payload['source']['srt_cues']],
+                             ['Opening jab','Boundary crossing'])
+            self.assertEqual(payload['source']['srt_cues'][-1]['end'],15.0)
+            self.assertNotIn('FINAL VICTORY LYRIC',json.dumps(payload))
+            self.assertNotIn('Save the FINAL VICTORY',json.dumps(payload))
+            self.assertIn('This chapter ONLY covers 0ms to 15000ms',
+                          writer.call_args_list[1].args[1])
+            self.assertIn('Do NOT write the ending or climax yet.',
+                          writer.call_args_list[1].args[1])
+            final_payload=json.loads(writer.call_args_list[4].args[2][0][1])
+            self.assertEqual([c['text'] for c in final_payload['source']['srt_cues']],
+                             ['FINAL VICTORY LYRIC'])
 
 
 if __name__=='__main__':
