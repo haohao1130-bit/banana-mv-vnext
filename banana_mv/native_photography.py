@@ -123,7 +123,8 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
     i=seg['index']
     local=window(film,round(seg['start']*1000),
                  round((seg['start']+seg['seconds'])*1000))
-    required=_cut_times(local)
+    classic=req.get('native_camera_version')==2
+    required=[0] if classic else _cut_times(local)
     from banana_mv.reference_bindings import reference_manifest
     refs=references if references is not None else reference_manifest(req.get('prompt',''),len(originals))
     expected_refs=[row['picture'] for row in refs]
@@ -139,6 +140,9 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
         '\nNative output sections, in order: subject_definitions, summary, '
         'retention_analysis, detailed_description, overall_soundscape, '
         'non_diegetic_music. Keep <Audio 1>: fully_copy.')
+    if classic:
+        from banana_mv.classic_mv import AUTO_FILMING as CLASSIC_CAMERA, DYNAMIC_EDITING as CLASSIC_EDIT, REFERENCE_PERFORMANCE as CLASSIC_ACTING, MV_SCOPE, adaptation
+        system=(NATIVE_ENHANCER_SYSTEM+'\n'+guide_text+'\n'+MV_SCOPE+'\n'+adaptation(req)+'\n'+CLASSIC_ACTING+'\n'+CLASSIC_CAMERA+'\n'+(CLASSIC_EDIT if req.get('dynamic_cuts',True) else 'Prefer motivated longer takes.'))
     intens=req.get('intensity','high')
     ctx={
       'duration_seconds':seg['seconds'],
@@ -164,11 +168,20 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
          'face_identity':req.get('face_identity',True)
       }
     }
+    if classic:
+        from banana_mv.classic_mv import interval_ending
+        ctx['ending']=interval_ending(film.get('ending_contract',{}),seg)
+        ctx['current_clip_commission']=ctx.pop('locked_beats')
+        ctx['event_policy']='The local commission defines events, scene roles and explicit user timing; storage entries are NOT camera cuts. Choose motivated MV coverage and internal full-frame intercuts freely.'
+        ctx['source_song']='<Audio 1> unchanged. Vocals are soundtrack only outside the explicitly assigned singing scene.'
+        system+='\n'+CLIP_INTENSITY.get(intens,CLIP_INTENSITY['high'])
     message=('Enhance ONLY this local timeline into real native H3 filming prose; '
              'the story and every required cut time are locked. Compose a cinematic '
              'series of camera views rather than echoing the event outline. '
              'No other chapter is visible.\n'
              'Locked local filming commission:\n'+json.dumps(ctx,ensure_ascii=False))
+    if classic:
+        message=('Target video duration: '+str(seg['seconds'])+' seconds.\nOriginal prompt — current interval only. Shared world and scene-specific vocal roles:\n'+ctx['reference_and_audio_setup']+'\nThe local commission is the screenplay, not a fixed shot list. Allocate coverage and cuts from music and visible events.\nLocked local filming commission:\n'+json.dumps(ctx,ensure_ascii=False))
     parts=[('text',message)]+_pictures(originals)
     retries=min(1,rewrite_retry_count(req))
     rw=copy.deepcopy(cfg)

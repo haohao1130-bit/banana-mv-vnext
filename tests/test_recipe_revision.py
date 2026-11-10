@@ -169,13 +169,14 @@ if __name__=='__main__':
     unittest.main()
 
 class NativeRecipeRevisionTests(unittest.TestCase):
+    camera_version=1
     setUp=RecipeRevisionTests.setUp
     def test_native_revision_enhances_only_changed_windows_then_adopts_exact_output(self):
         from PIL import Image
         from banana_mv.native_photography import _cut_times
         from banana_mv.whole_film import window
         from test_native_photography import native_delivery
-        self.job['request'].update(native_camera_version=1,rewrite_retries=0,mode='chain')
+        self.job['request'].update(native_camera_version=self.camera_version,rewrite_retries=0,mode='chain')
         image=self.work/'ref.png';Image.new('RGB',(8,8),'red').save(image)
         guide=self.work/'guide.md';guide.write_text('OFFICIAL full guide '+('camera composition '*400))
         self.cfg['guides']={'ref':str(guide)}
@@ -211,7 +212,7 @@ class NativeRecipeRevisionTests(unittest.TestCase):
         self.assertEqual(delivery['status'],'native')
     def test_failed_native_revision_warns_and_leaves_active_prompt_untouched(self):
         from PIL import Image
-        self.job['request'].update(native_camera_version=1,rewrite_retries=0)
+        self.job['request'].update(native_camera_version=self.camera_version,rewrite_retries=0)
         image=self.work/'ref.png';Image.new('RGB',(8,8),'red').save(image)
         guide=self.work/'guide.md';guide.write_text('FULL GUIDE')
         self.cfg['guides']={'ref':str(guide)}
@@ -223,3 +224,7 @@ class NativeRecipeRevisionTests(unittest.TestCase):
         candidate=json.loads((self.folder/'recipe_revisions'/result['id']/'candidate.json').read_text())
         self.assertTrue(any('text backend offline' in w for w in candidate['plan']['quality_warnings']))
         self.assertEqual((self.folder/'00_prompt.txt').read_bytes(),original)
+
+
+class ClassicMVRevisionTests(NativeRecipeRevisionTests):
+    camera_version=2

@@ -431,12 +431,16 @@ Use one supported primary mode in each header. Return the full screenplay once.'
 
 def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
     """Persist allocated scripts and fixed settings, without replanning per slot."""
-    contract=ending_contract(req,segments[-1]['start']+segments[-1]['seconds'],segments)
+    classic=req.get('mv_director_version')==1
+    if classic:
+        from banana_mv.classic_mv import ending, interval_ending
+        contract=ending(req,segments)
+    else:contract=ending_contract(req,segments[-1]['start']+segments[-1]['seconds'],segments)
     timeline=[]
     for seg in segments:
         timeline.append({k:seg[k] for k in ('index','start','seconds')} | {
             'local_srt':excerpt(req,seg),'audio_evidence':seg.get('audio_evidence',{}),
-            'ending':clip_ending(req,dict(seg,direction_ending_contract=contract))})
+            'ending':(interval_ending(contract,seg) if classic else clip_ending(req,dict(seg,direction_ending_contract=contract)))})
     task={'format':'isolated_shoot_briefs_v3',
           'brief':map_image_mentions(req.get('prompt',''),len(originals)),
           'user_role_declarations':source_role_settings(req.get('prompt',''),len(originals)),
@@ -445,6 +449,7 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
           'intensity':req.get('intensity','high'),'dynamic_cuts':req.get('dynamic_cuts',True),
           'timeline':timeline,
           'ending_contract':contract}
+    if classic:task['format']='classic_mv_commissions_v1'
     if not req.get('vnext_preproduction'):task.pop('user_role_declarations',None)
     complete_story=req.get('project_scope','full')=='full'
     fingerprint=digest(task)
@@ -470,6 +475,9 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
     system=((VNEXT_ALLOCATION_SYSTEM if req.get('vnext_preproduction') else ALLOCATION_SYSTEM)+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+'\n'+CLIP_INTENSITY[req.get('intensity','high')]+
             '\nApply this intensity to filmable event development; leave shot selection to the clip director.\nSupported modes: '+
             ', '.join(MODES)+f'. Deliver {len(segments)} CLIP blocks.')
+    if classic:
+        from banana_mv.classic_mv import allocation_system
+        system=allocation_system(ALLOCATION_SYSTEM)+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+'\nSupported modes: '+', '.join(MODES)+f'. Deliver {len(segments)} CLIP blocks.'
     if complete_story:
         system+='\nCOMPLETE STORY SCOPE: Read the ENTIRE user brief before allocation. Budget opening, development, decisive resolution and final image over the ENTIRE available duration. Work backward from the mandatory ending, reserve enough room for it, then fit the middle. Compress optional staging rather than dropping required events or stopping at paragraph N. Musical section labels guide accents only; no outro is required to finish a story. For a very short tail, complete decisive events in the preceding full interval and sustain their result in the tail. If the complete request cannot fit, explicitly report that rather than delivering an incomplete story.'
     if req.get('vnext_preproduction'):
@@ -502,7 +510,7 @@ def ensure_shoot_plan(cfg,req,segments,originals,work,rewrite):
                     raise SceneStateError('分段大綱順序或模式錯誤。')
                 result.append({'index':seg['index'],'mode':row['mode'],'handoff_version':1,
                                'event':_bound(row['prompt'],len(originals))})
-            _check_distinct_events(result)
+            if not classic:_check_distinct_events(result)
             outcome=re.search(r'^===\s*STORY OUTCOME\s*===\s*\n(.*?)(?=^===\s*CLIP\s)',text,re.S|re.M)
             outcome_text=outcome[1].strip() if outcome else ''
             if req.get('vnext_preproduction') and req.get('screenplay_review',True):
@@ -683,6 +691,7 @@ def write_shoot_prompt(cfg,req,segment,originals,tail,rewrite,progress=None):
             if attempt>=rewrite_retry_count(req):
                 raise SceneStateError('當段拍攝稿交稿失敗：'+str(error)) from error
             attempts=parts+[('text','Return only the current native H3 prompt. Fix H3 native formatting, shot timing or connected media only: '+str(error))]
+
 
 
 

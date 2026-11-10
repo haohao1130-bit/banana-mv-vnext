@@ -115,3 +115,28 @@ that complete-but-malformed shape. Truncated text still requires a bounded retry
 so future retry causes no longer need to be inferred from file counts. Configured
 Macro/Chapter retry limits are unchanged; native-camera format attempts remain
 at most initial + one retry. No extra semantic rejection loop is introduced.
+
+
+## Music-led MV restoration (new jobs only)
+
+New jobs use `mv_director_version=1`, `native_camera_version=2` and master
+version 9. They call the established CLIP allocation once for the entire song,
+then the native photographer once per render interval in normal successful delivery.
+Macro Spine and chained chapter camera JSON are bypassed for these jobs. Format
+retries remain bounded and can add calls. This is not a measured speed guarantee.
+
+The photography system retains the complete official guide and restores the
+pre-alignment `5aa82c3` adaptation, performance, per-shot shooting decisions and
+dynamic editing instructions. Each photographer sees shared identity/scene duties,
+its local commission, local audio references and ending phase; other intervals and
+the full original brief are excluded. Internal cuts are chosen by the photographer,
+not locked to compatibility storage beats. Music-led intercuts have no scene quota.
+Scene-specific vocal permissions, full-frame independent locations and source audio
+reuse remain explicit. Reasonable repeated performance and commissioned motifs are
+allowed. Only residual tails of at most three seconds inherit an achieved ending.
+
+Saved version 1–8 jobs retain their original path. Manual revision directs only
+changed windows and stages candidate output before adoption. Unit tests cover both
+native versions, cache reuse, isolated inputs and short-tail behavior. Actual 9B
+montage quality, timing and H3 rendering still require local acceptance; main and
+Colab are not upgraded by this branch change.

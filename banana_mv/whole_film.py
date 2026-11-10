@@ -741,7 +741,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
     # A saved v1/v2 master must keep its original fingerprint and finale rules.
     # Only fresh v3 masters use the source-duration finale policy.
-    saved_version=saved.get('version',1) if saved is not None else 8
+    saved_version=saved.get('version',1) if saved is not None else (9 if req.get('mv_director_version')==1 else 8)
     modern=saved_version>=2
     source={'brief':req.get('prompt',''),'duration_ms':duration_ms,
             'adaptation':adaptation_direction(req),
@@ -762,6 +762,10 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         source['creative_contract']=creative_contract(req.get('prompt',''))
     if saved_version>=5:source['chapter_handoff_version']=6 if saved_version>=8 else (5 if saved_version>=7 else (4 if saved_version>=6 else 3))
     if saved_version>=8:source['vocal_reference_policy_version']=2
+    if saved_version>=9:
+        from banana_mv.classic_mv import ending
+        source['mv_director_version']=1
+        source['ending']=ending(req,segments)
     fingerprint=digest(source)
     from banana_mv.reference_bindings import reference_manifest, bind_definitions
     references=reference_manifest(req.get('prompt',''),len(originals))
@@ -786,12 +790,17 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         actual_commission=(('CHAINED UPSTREAM AUTHORING\nMacro:\n'+SPINE_SYSTEM+
             '\nChapter:\n'+CHAPTER_SYSTEM+'\n'+COMPACT_H3_DIRECTOR_GUIDE)
             if use_chained else system)
+        if saved_version>=9:
+            actual_commission='CLASSIC MUSIC-LED MV: one whole-song allocation, then isolated native photography.\nActual allocation inputs and deliveries: mv_allocation/\nNo Macro Spine or chained chapter camera generation is called.'
         (folder/'whole_film_commission.txt').write_text(actual_commission,encoding='utf-8')
         parts=[('text',json.dumps(writer_source,ensure_ascii=False))]+_pictures(originals)
         # Saved raw deliveries belong to this immutable job. Recover a complete
         # response before paying for another creative call; never close truncated JSON.
         film=None;recovery=[]
-        for candidate in sorted(folder.glob('whole_film_raw_*.txt'),key=lambda p:p.stat().st_mtime):
+        if saved_version>=9:
+            from banana_mv.classic_mv import author
+            film=author(cfg,req,segments,originals,folder,rewrite,progress)
+        for candidate in ([] if film is not None else sorted(folder.glob('whole_film_raw_*.txt'),key=lambda p:p.stat().st_mtime)):
             try:
                 film=parse_film(candidate.read_text(encoding='utf-8'),duration_ms)
                 recovery.append({'raw_file':candidate.name,'accepted':True})
@@ -876,7 +885,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     for seg in segments:
         text,local=compile_window(film,seg,chain=req.get('mode')=='chain',face_identity=modern and req.get('face_identity',True),reference_manifest=references if modern else None)
         old_prompt=folder/f'{seg["index"]:02d}_prompt.txt'
-        if modern and req.get('native_camera_version')==1:
+        if modern and req.get('native_camera_version') in (1,2):
             # Freeze the whole-song screenplay before asking the OLD native
             # camera director to improve coverage of this one local window.
             # It uses the official H3 guide; no storyline reconstruction.

@@ -98,7 +98,7 @@ def _compiled(film, job, folder, *, cfg=None, rewrite=None, originals=None, stag
             chain=req.get('mode')=='chain',
             face_identity=req.get('face_identity',True),
             reference_manifest=references)
-        if req.get('native_camera_version')==1:
+        if req.get('native_camera_version') in (1,2):
             start=round(seg['start']*1000);end=round((seg['start']+seg['seconds'])*1000)
             unchanged=(original is not None and original['subject_definitions']==film['subject_definitions']
                        and window(original,start,end)==window(film,start,end))
