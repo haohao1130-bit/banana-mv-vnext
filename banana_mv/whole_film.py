@@ -359,7 +359,14 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             started=time.monotonic()
             request_id=uuid.uuid4().hex[:8]
             raw=rewrite(writer_cfg,system,parts,request_id)
+            try:
+                from banana_mv.services import DATA as service_data
+                trace_path=service_data/'rewriter_runs'/(request_id+'.json')
+                actual_seed=json.loads(trace_path.read_text(encoding='utf-8')).get('seed') if trace_path.is_file() else None
+            except (ValueError,OSError):
+                actual_seed=None
             atomic_json(folder/'whole_film_generation.json', {'attempt':attempt+1,
+                'actual_textgenerate_seed':actual_seed,
                 'rewrite_request_id':request_id,
                 'rewriter_parameters':{k:writer_cfg['rewriter'].get(k) for k in
                     ('model','thinking','mtp','max_length','temperature','top_p','top_k')},
