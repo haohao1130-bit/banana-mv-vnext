@@ -77,6 +77,19 @@ def _delivered_cuts(text):
     return times
 
 
+def _focused_guide(guide):
+    """Extract the official camera/shot-writing portion, not the huge task manual.
+
+    The complete guide is retained on disk. Only its concise relevant excerpt
+    is supplied to the camera-only call to prevent 9B role overload.
+    """
+    chunks=re.split(r'(?=^## [0-9]+\.)',guide,flags=re.M)
+    focused=[x for x in chunks if re.match(r'^## (?:1|5)\.',x)]
+    if focused:
+        return '\n'.join(focused)[:5800]
+    return guide[:1600]
+
+
 def _verify(text, seconds, required, expected_refs):
     validate_native_mv_format(text,seconds,require_native=True)
     delivered=_delivered_cuts(text)
@@ -123,10 +136,13 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
                 return _verify(cached['prompt'],seg['seconds'],required,expected_refs),None
         except (ValueError,KeyError,TypeError,OSError):
             pass
-    guide=Path(cfg['guides']['ref']).read_text(encoding='utf-8')
-    # Restore the actual OLD per-clip native director rather than a Python
-    # six-section formatter. Locked beats prevent it from rescheduling the film.
-    system=NATIVE_ENHANCER_SYSTEM+guide+'\n'+NATIVE_FILMING_CONTRACT
+    guide=_focused_guide(Path(cfg['guides']['ref']).read_text(encoding='utf-8'))
+    # Restore the OLD specialist CAMERA ROLE, not the old oversized prompt.
+    # One local passage plus focused official shot guidance; no full story.
+    system=(NATIVE_ENHANCER_SYSTEM+guide+'\n'+NATIVE_FILMING_CONTRACT+
+        '\nNative output sections, in order: subject_definitions, summary, '
+        'retention_analysis, detailed_description, overall_soundscape, '
+        'non_diegetic_music. Keep <Audio 1>: fully_copy.')
     intens=req.get('intensity','high')
     ctx={
       'duration_seconds':seg['seconds'],
@@ -135,28 +151,31 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
       'locked_beats':[{'at_ms':row['at_ms'],'shot_id':row['shot_id'],
                        'scene_and_start_state':row['state'],
                        'visible_action':row['action'],
-                       'camera_intention':row['camera'],
-                       'draft_filming':row.get('filming_prompt','')}
+                       'camera_intention':row['camera']}
                       for row in local],
       'source_song':'<Audio 1>, unchanged, only named vocal scenes lip-sync',
       'local_srt':seg.get('local_srt',[]),
       'music_evidence':seg.get('audio_evidence',{}),
-      'native_compiler_draft':compiled,
       'reference_manifest':refs,
-      'direction':adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+
-                  '\n'+AUTO_FILMING+'\n'+CLIP_INTENSITY.get(intens,CLIP_INTENSITY['high'])+
-                  ('\n'+DYNAMIC_EDITING if req.get('dynamic_cuts',True) else ''),
+      'reference_and_audio_setup':compiled.split('summary:',1)[0],
+      'direction':{
+         'adaptation':'FREE' if req.get('story_plan',True) else 'FAITHFUL',
+         'intensity':intens,
+         'camera_energy':CLIP_INTENSITY.get(intens,CLIP_INTENSITY['high']),
+         'dynamic_cuts':req.get('dynamic_cuts',True),
+         'face_identity':req.get('face_identity',True)
+      }
     }
-    message=('Enhance this locked continuous-film window into a real native H3 '
-             'camera-directed film. Never change its assigned event timeline. '
-             'Preserve each required cut. Extra shots only inside the same '
-             'event envelope.\n'+LOCAL_FILMING_COMMISSION+
-             '\nLocked local filming commission:\n'+json.dumps(ctx,ensure_ascii=False))
+    message=('Enhance ONLY this local timeline into real native H3 filming prose; '
+             'the story and every required cut time are locked. Compose a cinematic '
+             'series of camera views rather than echoing the event outline. '
+             'No other chapter is visible.\n'
+             'Locked local filming commission:\n'+json.dumps(ctx,ensure_ascii=False))
     parts=[('text',message)]+_pictures(originals)
-    retries=rewrite_retry_count(req)
+    retries=min(1,rewrite_retry_count(req))
     rw=copy.deepcopy(cfg)
-    rw.setdefault('rewriter',{})['max_length']=max(8192,int(
-        rw.get('rewriter',{}).get('max_length',8192)))
+    rw.setdefault('rewriter',{})['max_length']=min(8192,max(4096,int(
+        rw.get('rewriter',{}).get('max_length',8192))))
     issues=[]
     for attempt in range(retries+1):
         if progress:progress({'stage':'native_camera','done':i,
