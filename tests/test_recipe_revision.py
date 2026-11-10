@@ -109,6 +109,11 @@ class RecipeRevisionTests(unittest.TestCase):
         self.assertNotIn('plan_translation',updated)
         self.assertEqual(server.read_state(self.job['id'])['plan_revision'],updated['plan_revision'])
         self.assertEqual(updated['status'],'plan_ready')
+        self.assertEqual(updated['recipe_advice']['status'],'stale_after_adoption')
+        self.assertEqual(json.loads((self.work/'screenplay_review.json').read_text())['status'],
+                         'user_revision_unreviewed')
+        self.assertEqual(json.loads((self.work/'director_plan.json').read_text())['quality_status'],
+                         'user_revision_unreviewed')
 
     def test_apply_failure_rolls_back_original_files_and_status(self):
         result=self.stage()
