@@ -4,22 +4,36 @@ from banana_mv.whole_film import _chapter_stable_cast, _ongoing_handoff, CHAPTER
 from test_chained_whole_film import beat
 
 class CastHandoffTests(unittest.TestCase):
-    def test_actual_macro_field_names_survive_in_early_and_final_chapters(self):
-        rows=[{'id':'小語','identity':'成年女性，高馬尾紅絲帶，黑金上衣',
-               'duties':'演唱會中演唱原曲；擂台不演唱；在終場鐘聲前打出致勝一拳',
+    def test_stable_roles_are_preserved_without_keyword_deletion(self):
+        rows=[{'id':'甲','identity':'成年女性，高馬尾紅絲帶，黑金上衣',
                'scene_duties':'舞台唯一主唱；擂台只交手',
-               'reference':'<Picture 1>','outcome':'final victory'},
-              {'id':'拳王','identity':'成年男性，黑金拳擊短褲',
-               'scene_duties':'不參與演唱；後期被抓住破綻反擊'}]
+               'duties':'最後一句只由甲演唱；高潮段仍由甲演唱；擂台不唱',
+               'reference':'<Picture 1>','outcome':'future plot outside stable schema'}]
         for final in (False,True):
             result=json.loads(_chapter_stable_cast(json.dumps(rows,ensure_ascii=False),final=final))
-            self.assertEqual(result[0]['identity'],rows[0]['identity'])
-            self.assertEqual(result[0]['scene_duties'], '舞台唯一主唱; 擂台只交手')
-            self.assertIn('擂台不演唱',result[0]['duties'])
-            self.assertNotIn('致勝',result[0]['duties'])
-            self.assertEqual(result[1]['scene_duties'],'不參與演唱')
+            for k in ('identity','scene_duties','duties','reference'):
+                self.assertEqual(result[0][k],rows[0][k])
             self.assertNotIn('outcome',result[0])
-            self.assertEqual(result[0]['reference'],'<Picture 1>')
+    def test_exit_snapshot_drops_free_form_events_but_keeps_each_scene(self):
+        from banana_mv.whole_film import _present_exit_state
+        raw={'scene_states':{'ring':{'position':'corner','pose':'guard raised',
+               'physical_condition':'sweating','props':['gloves'],'action':'COMPLETED_PUNCH'},
+               'stage':{'position':'center stage','pose':'standing at microphone'}},
+             'chapter_exit_target':'FUTURE_VICTORY','event':'COMPLETED_PUNCH'}
+        handoff=_present_exit_state(raw)
+        self.assertEqual(handoff['scene_states']['ring']['pose'],'guard raised')
+        self.assertNotIn('COMPLETED_PUNCH',json.dumps(handoff))
+        self.assertNotIn('FUTURE_VICTORY',json.dumps(handoff))
+        self.assertEqual(_present_exit_state('A completed punch hits the opponent.'),{})
+    def test_compiled_cast_uses_same_structural_projection_as_chapters(self):
+        from test_chained_whole_film import beat
+        from banana_mv.whole_film import compile_window
+        definitions=json.dumps([{'id':'甲','identity':'adult performer',
+            'scene_duties':'最後一句只由甲演唱','outcome':'FUTURE_VICTORY'}],ensure_ascii=False)
+        film={'subject_definitions':definitions,'beats':[beat(0,'a','Current event')]}
+        prompt,_=compile_window(film,dict(index=0,start=0,seconds=10))
+        self.assertIn('最後一句只由甲演唱',prompt)
+        self.assertNotIn('FUTURE_VICTORY',prompt)
     def test_handoff_carries_ongoing_result_without_replaying_contact(self):
         b=beat(6080,'A','COMPLETED_CONTACT')
         b.update(state='BEFORE_CONTACT',filming_prompt='REPLAY_CONTACT',

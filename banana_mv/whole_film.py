@@ -285,7 +285,7 @@ def compile_window(film, seg, *, chain=False, face_identity=False, reference_man
     canonical=lambda value:re.sub(r'<\s*(?:Image|Picture)\s*(\d+)\s*>',
         lambda m:f'<Picture {int(m[1])}>',value,flags=re.I)
     from banana_mv.reference_bindings import bind_definitions
-    bound,_=bind_definitions(film['subject_definitions'],reference_manifest or [])
+    bound,_=bind_definitions(_chapter_stable_cast(film['subject_definitions']),reference_manifest or [])
     definitions=canonical(bound)
     linked={int(n) for n in re.findall(r'<Picture (\d+)>',definitions)}
     for entry in reference_manifest or []:
@@ -325,6 +325,10 @@ The creative_contract names active strands, their scene-specific identities/voca
 commissioned intercutting, core causality and outcome. No split-screen or dual-panel:
 intercut different locations with independent timed shot_id values. Do not invent
 parallel strands when absent from the commission.
+Use identity for reference appearance/wardrobe, and scene_duties for fixed permissions
+by location (who sings, who acts, who is silent). Preserve supplied picture bindings.
+These fields describe WHO and WHERE, never WHAT happens later. Keep all future
+milestones, winning actions and conclusions in chapter goals/creative_contract.
 Identity tables retain full identity, reference mapping and scene-specific duties.
 Put outcomes and timed plot goals in chapters/creative_contract, NEVER in cast duties.
 Each actual view depicts ONE physical location. Plan intercutting as successive
@@ -349,9 +353,18 @@ condition and ongoing momentum only; no completed action recap or future event).
 beats are strictly increasing and less than chapter.end_ms. Every beat includes
 shot_id, state, continuation_state, camera, ongoing_camera, action, ongoing,
 mode, filming_prompt and ongoing_filming_prompt, all as nonempty strings.
+exit_state is a JSON object with scene_states: {scene name: {position, pose,
+physical_condition, wardrobe, props}}. Describe static present conditions only.
+Do not put punches, impacts, entrances, clothing changes, completed actions or
+future goals in exit_state; those are events in beats. Use a held defensive pose
+at the corner, not a sentence describing a punch landing.
 ongoing is present-tense movement PROSE, never a JSON true or false.
 Write ONLY this chapter's current events; future lyrics, finale and climax
 belong to later chapters. exit_state is the state at THIS boundary, not song end.
+Each beat must describe exactly ONE physical camera view at ONE location.
+Select one location (for example concert OR ring, never both).
+NEVER write '擂台: ...; 演唱會: ...' in the same filming_prompt.
+Cross-cutting between locations advances to the NEXT beat with a different shot_id.
 Each beat is ONE view at ONE physical location. A stage view and a ring view
 are successive separate beats with distinct shot_id and global at_ms. Never put
 both places into one state/camera/filming_prompt, even separated by semicolons.
@@ -441,16 +454,24 @@ def _chapter_stable_cast(definitions, *, final=False):
         if isinstance(value,list):return [clean(row) for row in value]
         if not isinstance(value,dict):return value
         result={k:clean(v) for k,v in value.items() if k not in plot_keys}
-        for key in ('duties','scene_duties','role','vocal_role'):
-            text=result.get(key)
-            if isinstance(text,str):
-                # Legacy Macro tables mix stable duties with future plot clauses.
-                # Keep ordinary singing/non-singing permissions and scene bindings.
-                clauses=re.split(r'[；;。\n]+',text)
-                result[key]='; '.join(c for c in clauses if c.strip() and not re.search(
-                    r'終場|最後|最終|後期|結局|高潮|\b(?:finally|eventually|climax|finale|outcome|later)\b',c,re.I))
         return result
     return json.dumps(clean(entries),ensure_ascii=False)
+
+
+def _present_exit_state(value):
+    """Project typed present-state fields; never forward a free-form event recap.
+
+    Unknown legacy prose is omitted, without rejecting an otherwise usable chapter.
+    The ongoing handoff remains available when legacy output has no typed snapshot.
+    """
+    if not isinstance(value,dict):return {}
+    fields={'position','location','pose','physical_condition','condition','wardrobe','props'}
+    result={k:v for k,v in value.items() if k in fields}
+    scenes=value.get('scene_states')
+    if isinstance(scenes,dict):
+        result['scene_states']={name:_present_exit_state(state) for name,state in scenes.items()
+                                if isinstance(state,dict)}
+    return result
 
 
 def _ongoing_handoff(beat):
@@ -602,7 +623,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                  'song_duration_ms':duration_ms}
         chapter_key=digest({'input_sha256':fingerprint,'chapter':chapter,
                             'previous_exit_state':previous_exit,'previous_last_beat':previous_last,
-                            'chapter_validator_version':3,'creative_contract':local_source.get('creative_contract')})
+                            'chapter_validator_version':4,'creative_contract':local_source.get('creative_contract')})
         piece=None
         if checkpoint.is_file():
             try:
@@ -640,7 +661,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                     error=str(exc)
                     if attempt==retries:raise
         assembled.extend(piece['beats'])
-        previous_exit=piece['exit_state']
+        previous_exit=_present_exit_state(piece['exit_state'])
         previous_last=_ongoing_handoff(piece['beats'][-1])
         if progress:progress({'stage':'author','substage':'chapter','done':index+1,
                                'total':len(spine['chapters'])})
@@ -661,7 +682,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
     # A saved v1/v2 master must keep its original fingerprint and finale rules.
     # Only fresh v3 masters use the source-duration finale policy.
-    saved_version=saved.get('version',1) if saved is not None else 5
+    saved_version=saved.get('version',1) if saved is not None else 6
     modern=saved_version>=2
     source={'brief':req.get('prompt',''),'duration_ms':duration_ms,
             'adaptation':adaptation_direction(req),
@@ -680,7 +701,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             render_windows=[{'index':s['index'],'start':s['start'],'seconds':s['seconds']} for s in segments])
     if saved_version>=4:
         source['creative_contract']=creative_contract(req.get('prompt',''))
-    if saved_version>=5:source['chapter_handoff_version']=3
+    if saved_version>=5:source['chapter_handoff_version']=4 if saved_version>=6 else 3
     fingerprint=digest(source)
     from banana_mv.reference_bindings import reference_manifest, bind_definitions
     references=reference_manifest(req.get('prompt',''),len(originals))
