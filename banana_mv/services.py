@@ -196,6 +196,20 @@ def build_rewrite_graph(cfg, system, parts, job_id):
             inputs['image'] = batch
         graph['generate'] = {'class_type': 'TextGenerate', 'inputs': inputs}
         graph['result'] = {'class_type': 'PreviewAny', 'inputs': {'source': ['generate', 0]}}
+        # Capture the *actual* ComfyUI sampling seed, not the request-id
+        # or the video render seed. Do not persist the prompt or image pixels.
+        try:
+            trace_dir = DATA/'rewriter_runs'
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            trace_id = ''.join(c for c in str(job_id) if c.isascii() and c.isalnum())[:48]
+            if trace_id:
+                trace = {'request_id':trace_id, 'seed':inputs['sampling_mode.seed'],
+                         'parameters':{k:rw.get(k) for k in
+                            ('model','thinking','mtp','max_length','temperature','top_p','top_k')}}
+                (trace_dir/(trace_id+'.json')).write_text(
+                    json.dumps(trace,ensure_ascii=False,indent=2),encoding='utf-8')
+        except OSError:
+            pass  # A read-only data directory must not break 9B generation.
         return graph, names
     except Exception:
         for name in names:
