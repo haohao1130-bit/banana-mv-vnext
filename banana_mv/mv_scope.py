@@ -73,7 +73,7 @@ def continuous_film_ending_contract(req, total):
             'finale and last lyric timing take precedence. Finish the requested '
             'result by the source end; do not create an artificial hold, move a '
             'climax earlier, or resolve a story at each technical clip boundary. '
-            'The final beat may show active action if the brief requires it. Any explicit final_hold_seconds reserves only the user's requested final image interval, not a generic hero pose. '
+            'The final beat may show active action if the brief requires it. Any explicit final_hold_seconds reserves only the requested final image interval, not a generic hero pose. '
             'Never extend, fade or replace the source song.'
         ),
     }
