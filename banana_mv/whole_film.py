@@ -837,11 +837,34 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
                                     face_identity=req.get('face_identity',True),reference_manifest=references)
         (folder/'whole_film_prompt.txt').write_text(full_prompt,encoding='utf-8')
     rows=[]
+    native_warnings=[]
     from banana_mv.shoot_plan import validate_native_mv_format
     from banana_mv.core import normalize_mv_prompt
     for seg in segments:
         text,local=compile_window(film,seg,chain=req.get('mode')=='chain',face_identity=modern and req.get('face_identity',True),reference_manifest=references if modern else None)
         old_prompt=folder/f'{seg["index"]:02d}_prompt.txt'
+        if modern and req.get('native_camera_version')==1:
+            # Freeze the whole-song screenplay before asking the OLD native
+            # camera director to improve coverage of this one local window.
+            # It uses the official H3 guide; no storyline reconstruction.
+            from banana_mv.native_photography import enhance_window
+            from banana_mv.lyrics_reference import excerpt
+            unshifted,_=compile_window(film,seg,chain=False,
+                face_identity=req.get('face_identity',True),
+                reference_manifest=references)
+            camera_seg=dict(seg,local_srt=excerpt(req,seg))
+            native,warn=enhance_window(cfg,req,camera_seg,film,originals,
+                unshifted,rewrite,folder,references=references,progress=progress)
+            if warn:native_warnings.append(warn)
+            if req.get('mode')=='chain' and seg['index']>0:
+                # No physical keyframe exists at planning time. Author with
+                # original image labels, then reserve Picture 1 for the actual
+                # previous segment frame during H3 rendering.
+                shift=lambda m:f'<Picture {int(m[1])+1}>'
+                native=re.sub(r'<Picture (\d+)>',shift,native)
+                native='subject_definitions:\n<Picture 1> is the actual preceding last frame, a continuity anchor rather than another actor.\n'+re.sub(
+                    r'^\s*subject_definitions\s*:\s*','',native,count=1)
+            text=native
         if not modern and old_prompt.is_file():text=old_prompt.read_text(encoding='utf-8')
         text=normalize_mv_prompt(text,len(originals)+int(req.get('mode')=='chain' and seg['index']>0))
         validate_native_mv_format(text,seg['seconds'],require_native=True)
@@ -854,7 +877,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
                      'event':'\n'.join(r['state']+' '+r['action'] for r in local)})
     plan={'version':5,'shared_setup':film['subject_definitions'],'segments':rows,
           'ending_contract':source['ending'],'whole_film_version':1,'visual_verified':False,
-          'quality_status':audit['status'],'quality_warnings':audit.get('warnings',[])}
+          'quality_status':audit['status'],'quality_warnings':audit.get('warnings',[])+native_warnings}
     atomic_json(Path(work)/'director_plan.json',plan)
     atomic_json(folder/'whole_film_windows.json',{'version':6,'clip_count':len(segments),'whole_film_version':1})
     return plan
