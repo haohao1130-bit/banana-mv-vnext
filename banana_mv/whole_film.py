@@ -315,10 +315,16 @@ def compile_window(film, seg, *, chain=False, face_identity=False, reference_man
 
 
 
+from banana_mv.creative_contract import creative_contract, CONTRACT_POLICY
+
 SPINE_SYSTEM = """Plan one COMPLETE music video before filming prompts are expanded.
 You have the whole source duration, the user's brief and reference image roles.
 Return ONLY JSON with: subject_definitions (stable identities and scene/vocal
-duties, no story spoilers) and chapters (ordered, contiguous macro chapters).
+duties, no story spoilers), creative_contract (100–150 words), and chapters (ordered, contiguous macro chapters).
+The creative_contract names active strands, their scene-specific identities/vocal duties,
+commissioned intercutting, core causality and outcome. No split-screen or dual-panel:
+intercut different locations with independent timed shot_id values. Do not invent
+parallel strands when absent from the commission.
 Every chapter needs integer start_ms, end_ms, goal, entry, exit_target.
 First start_ms is 0, last end_ms equals duration_ms. The supplied
 chapter_boundary_options_ms are the EXACT allowed start/end timestamps.
@@ -351,6 +357,9 @@ Only events assigned to this chapter occur here. Later chapter goals remain
 future events. The final chapter follows the user's actual final cue and song
 duration without an invented fixed hold or premature ending.
 """
+
+SPINE_SYSTEM += "\n"+CONTRACT_POLICY
+CHAPTER_SYSTEM += "\n"+CONTRACT_POLICY
 
 def _chapter_boundaries(segments, duration_ms):
     """Actual requested render-window edges are permissible AUTHORING borders."""
@@ -403,7 +412,8 @@ def _validated_spine(data, duration_ms, chapter_boundaries_ms=None):
                                 'entry':active[0]['entry'],
                                 'exit_target':active[-1]['exit_target']})
             chapters=aligned
-    return {'subject_definitions':definitions,'chapters':chapters}
+    return {'subject_definitions':definitions,'chapters':chapters,
+            'creative_contract':data.get('creative_contract','')}
 
 
 def _chapter_stable_cast(definitions, *, final=False):
@@ -458,6 +468,9 @@ def _chapter_source(source, spine, chapter, *, final=False):
            'reference_manifest':source.get('reference_manifest',[]),
            'direction':safe_direction,
            'adaptation':source.get('adaptation','')}
+    if 'creative_contract' in source:
+        local['creative_contract']={k:v for k,v in source['creative_contract'].items() if k!='explicit_constraints'}
+        local['creative_contract']['macro_summary']=spine.get('creative_contract','')
     if final:
         local['ending']=source.get('ending',{})
     return local
@@ -562,7 +575,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                  'song_duration_ms':duration_ms}
         chapter_key=digest({'input_sha256':fingerprint,'chapter':chapter,
                             'previous_exit_state':previous_exit,'previous_last_beat':previous_last,
-                            'chapter_validator_version':2})
+                            'chapter_validator_version':2,'creative_contract':local_source.get('creative_contract')})
         piece=None
         if checkpoint.is_file():
             try:
@@ -606,6 +619,8 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                                'total':len(spine['chapters'])})
     film=parse_film(json.dumps({'subject_definitions':spine['subject_definitions'],
                                 'beats':assembled},ensure_ascii=False),duration_ms)
+    film['authoring_chapters']=spine['chapters']
+    film['macro_creative_contract']=spine.get('creative_contract','')
     atomic_json(folder/'whole_film_generation.json',
                 {'mode':'chained','chapter_count':len(spine['chapters']),
                  'calls':receipts,'input_sha256':fingerprint})
@@ -619,7 +634,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
     # A saved v1/v2 master must keep its original fingerprint and finale rules.
     # Only fresh v3 masters use the source-duration finale policy.
-    saved_version=saved.get('version',1) if saved is not None else 3
+    saved_version=saved.get('version',1) if saved is not None else 4
     modern=saved_version>=2
     source={'brief':req.get('prompt',''),'duration_ms':duration_ms,
             'adaptation':adaptation_direction(req),
@@ -636,10 +651,14 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             reference_brief=map_image_mentions(req.get('prompt',''),len(originals)),
             direction=direction_context(req,len(originals)),
             render_windows=[{'index':s['index'],'start':s['start'],'seconds':s['seconds']} for s in segments])
+    if saved_version>=4:
+        source['creative_contract']=creative_contract(req.get('prompt',''))
     fingerprint=digest(source)
     from banana_mv.reference_bindings import reference_manifest, bind_definitions
     references=reference_manifest(req.get('prompt',''),len(originals))
     source['reference_manifest']=references
+    if saved_version>=4:
+        atomic_json(folder/'creative_contract.json',source['creative_contract'])
     if path.is_file():
         film=parse_film(json.dumps(saved['film']),duration_ms)
         if saved['input_sha256']!=fingerprint:raise ValueError('完整攝影稿與目前素材設定不符。')
@@ -702,6 +721,10 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
                 parts=[('text',json.dumps(writer_source,ensure_ascii=False)+'\nPrevious delivery was unreadable: '+str(exc)+'. Return the complete continuous timeline JSON.')]+_pictures(originals)
         atomic_json(path,{'version':saved_version,'input_sha256':fingerprint,'film':film,
                           'quality_status':'not_visually_verified'})
+    if saved_version>=4:
+        source['authoring_chapters']=film.get('authoring_chapters',[])
+        source['creative_contract']['macro_summary']=film.get('macro_creative_contract','')
+        atomic_json(folder/'creative_contract.json',source['creative_contract'])
     # Master review sees the whole song BEFORE any deterministic slicing.
     from banana_mv.whole_film_review import review_film
     from banana_mv.review_output import content_hash
@@ -710,7 +733,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     if review_path.is_file():
         try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
         except (ValueError,OSError):pass
-    if (prior_review.get('version')==4 and prior_review.get('scope')=='whole_film'
+    if (prior_review.get('version')==(5 if saved_version>=4 else 4) and prior_review.get('scope')=='whole_film'
             and prior_review.get('output_hash')==content_hash(film)
             and (prior_review.get('status')!='disabled' or not req.get('screenplay_review',True))):
         audit=prior_review
@@ -758,3 +781,4 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     atomic_json(Path(work)/'director_plan.json',plan)
     atomic_json(folder/'whole_film_windows.json',{'version':6,'clip_count':len(segments),'whole_film_version':1})
     return plan
+

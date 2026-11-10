@@ -122,7 +122,7 @@ class SourceDurationFinaleTests(unittest.TestCase):
             self.assertEqual(payload['ending']['finale_policy'],'source_duration_v2')
             self.assertEqual(payload['ending']['end_time'],9)
             master=json.loads((root/'preproduction/whole_film.json').read_text())
-            self.assertEqual(master['version'],3)
+            self.assertEqual(master['version'],4)
             generation=json.loads((root/'preproduction/whole_film_generation.json').read_text())
             self.assertEqual(len(generation['rewrite_request_id']),8)
             self.assertEqual(generation['rewriter_parameters']['max_length'],16384)
@@ -132,3 +132,4 @@ class SourceDurationFinaleTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+

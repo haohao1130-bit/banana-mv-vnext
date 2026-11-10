@@ -180,7 +180,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
     folder=Path(work)/'preproduction'
     folder.mkdir(exist_ok=True)
     current=copy.deepcopy(film)
-    audit={'version':4,'scope':'whole_film','status':'unchecked','rounds':0,
+    audit={'version':5 if source.get('creative_contract') else 4,'scope':'whole_film','status':'unchecked','rounds':0,
            'checks':[],'issues':[],'repairs':[],'format_attempts':[],'warnings':[]}
     if not req.get('screenplay_review',True):
         audit['status']='disabled'
@@ -203,14 +203,19 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
             audit['rounds']=round_index+1
             if progress:progress({'stage':'review','round':round_index+1,'max_rounds':maximum+1})
             clock=clock_context(current,source)
-            issues,formats=reviewed_json(REVIEW_SYSTEM+'\n'+OPTIONAL_TIMING_POLICY,
-                {'source':source,'subject_definitions':current['subject_definitions'],
-                 'clock':{k:v for k,v in clock.items() if k!='timeline'},
-                 'timeline':clock['timeline'],
-                 'rendered_subject_definitions':bind_definitions(current['subject_definitions'],source.get('reference_manifest',[]))[0],
-                 'camera_review_enabled':req.get('camera_review',True),
-                 'render_clock':render_clock(current,source)},call,folder,f'film_review_{round_index:02d}',
-                set(range(len(current['beats']))) | {-1},req.get('review_format_retries',2))
+            chapters=source.get('authoring_chapters',[])
+            if source.get('creative_contract') and chapters:
+                issues,formats=commission_review(source,current,clock,call,folder,round_index,
+                                                req.get('review_format_retries',2))
+            else:
+                issues,formats=reviewed_json(REVIEW_SYSTEM+'\n'+OPTIONAL_TIMING_POLICY,
+                    {'source':source,'subject_definitions':current['subject_definitions'],
+                     'clock':{k:v for k,v in clock.items() if k!='timeline'},
+                     'timeline':clock['timeline'],
+                     'rendered_subject_definitions':bind_definitions(current['subject_definitions'],source.get('reference_manifest',[]))[0],
+                     'camera_review_enabled':req.get('camera_review',True),
+                     'render_clock':render_clock(current,source)},call,folder,f'film_review_{round_index:02d}',
+                    set(range(len(current['beats']))) | {-1},req.get('review_format_retries',2))
             audit['format_attempts'].append(formats)
             exact=timed_issues(current,source)
             window_issues=window_timing_issues(current,source)
@@ -243,9 +248,20 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
                 audit['status']='warnings'
                 audit['warnings'].append('Confirmed issues remain after bounded repairs; review before rendering.')
                 break
-            global_repair=any(row['index']==-1 for row in issues)
+            targeted=bool(source.get('creative_contract') and chapters)
+            if targeted and any(row['index']==-1 for row in issues):
+                audit['status']='warnings'
+                audit['warnings'].append('A global issue needs a named chapter; whole-film rewriting is disabled.')
+                break
+            global_repair=not targeted and any(row['index']==-1 for row in issues)
             groups=[]
-            if global_repair:
+            if targeted:
+                selected=set()
+                for issue in issues:
+                    at=current['beats'][issue['index']]['at_ms']
+                    selected.add(next(i for i,c in enumerate(chapters) if c['start_ms']<=at<c['end_ms']))
+                groups=[[i for i,b in enumerate(current['beats']) if chapters[n]['start_ms']<=b['at_ms']<chapters[n]['end_ms']] for n in sorted(selected)]
+            elif global_repair:
                 groups=[list(range(len(current['beats'])))]
             else:
                 for idx in sorted({row['index'] for row in issues}):
@@ -257,7 +273,10 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
                 end=current['beats'][hi+1]['at_ms'] if hi+1<len(current['beats']) else source['duration_ms']
                 reasons=issues if global_repair else [v for v in issues if v['index'] in group]
                 record={'round':round_index+1,'indices':group,'accepted':False,
-                        'scope':'whole_film' if global_repair else 'local'}
+                        'scope':'chapter' if targeted else ('whole_film' if global_repair else 'local')}
+                if targeted:
+                    record['target_chapter']=next(i for i,c in enumerate(chapters) if c['start_ms']<=current['beats'][lo]['at_ms']<c['end_ms'])
+                    record['repair_instruction']='; '.join(v.get('repair_instruction',v['reason']) for v in reasons)
                 try:
                     if progress:progress({'stage':'repair','round':round_index+1,'scope':record['scope'],'indices':group})
                     raw=call((GLOBAL_REPAIR_SYSTEM if global_repair else REPAIR_SYSTEM)+'\n'+OPTIONAL_TIMING_POLICY,{
@@ -265,7 +284,9 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
                         'editable_range':{'first_index':lo,'last_index':hi,
                             'start_ms':current['beats'][lo]['at_ms'],'end_ms_exclusive':end},
                         'previous_beat':current['beats'][lo-1] if lo else None,
-                        'next_beat':current['beats'][hi+1] if hi+1<len(current['beats']) else None})
+                        'next_beat':current['beats'][hi+1] if hi+1<len(current['beats']) else None,
+                        'target_chapter':record.get('target_chapter'),
+                        'repair_instruction':record.get('repair_instruction')})
                     name=f'film_repair_{round_index:02d}_{lo:04d}_{uuid.uuid4().hex[:8]}.txt'
                     (folder/name).write_text(raw,encoding='utf-8');record['raw_file']=name
                     body=raw.strip()
@@ -323,3 +344,50 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
         audit['warnings'].append('Review/repair failed; usable film retained without a QA pass.')
     audit['output_hash']=content_hash(current)
     return current,audit
+
+
+COMMISSION_SYSTEM = '''Review the full timeline against the ORIGINAL COMMISSION and creative_contract.
+Return JSON only: {"issues":[{"target_chapter":0,"reason":"source quote and actual timestamp evidence","repair_instruction":"minimal chapter correction"}]}.
+Chapter numbering is zero-based, from authoring_chapters. Name only chapters that need changes.
+Use {"issues":[]} only when all commissioned obligations are satisfied.
+Checklist: active strands and their required intercut relationship; scene-specific singer
+permissions and identity; commissioned causal milestones and ending; real timed camera cuts.
+If an explicitly commissioned ongoing strand disappears after chapter 0 for more than one
+chapter without a commission-consistent resolution, reject with evidence and select a suitable
+chapter to restore development. Do not demand each strand in every chapter, equal time or
+regular cuts. Longer uninterrupted passages and unequal irregular returns are valid.
+No split-screen or dual-panel. Different locations need separate timed beats and shot_ids.
+Do not invent parallel narratives for single-line commissions. Lyric imagery is not story fact.
+SRT is optional. Judge explicit singing claims only when timing evidence exists.
+Never rewrite the film here. Name the minimum chapter(s) for local repair; preserve valid work.
+The reason must cite original wording and observed events/times, not keyword frequencies.'''
+
+
+def commission_review(source, film, clock, call, folder, round_index, retries):
+    """Bounded chapter tickets. Invalid/missing evidence is never a clean pass."""
+    attempts=[];error='';chapters=source['authoring_chapters']
+    for attempt in range(min(2,max(0,int(retries)))+1):
+        name=f'commission_review_{round_index:02d}_{attempt:02d}.txt'
+        try:
+            raw=call(COMMISSION_SYSTEM+ ('\nPrevious invalid delivery: '+error if error else ''),
+                {'original_brief':source.get('brief',''),'creative_contract':source['creative_contract'],
+                 'authoring_chapters':chapters,'timeline':clock['timeline'],
+                 'subject_definitions':film['subject_definitions'],'srt_cues':source.get('srt_cues',[])})
+            (folder/name).write_text(raw,encoding='utf-8')
+            body=raw.strip()
+            if body.startswith('```'):body=body.split('\n',1)[1].rsplit('```',1)[0].strip()
+            data=json.loads(body)
+            if not isinstance(data,dict) or not isinstance(data.get('issues'),list):raise ValueError('Expected issues array.')
+            issues=[]
+            for ticket in data['issues']:
+                n=ticket.get('target_chapter')
+                if type(n) is not int or not 0<=n<len(chapters):raise ValueError('Name a valid target_chapter.')
+                if any(not isinstance(ticket.get(k),str) or not ticket[k].strip() for k in ('reason','repair_instruction')):
+                    raise ValueError('Each ticket needs evidence and repair_instruction.')
+                idx=next(i for i,b in enumerate(film['beats']) if chapters[n]['start_ms']<=b['at_ms']<chapters[n]['end_ms'])
+                issues.append(dict(ticket,index=idx))
+            attempts.append({'raw_file':name,'status':'valid'})
+            return issues,{'status':'valid','attempts':attempts}
+        except (ValueError,KeyError,TypeError,RuntimeError,OSError,StopIteration) as exc:
+            error=str(exc);attempts.append({'raw_file':name,'status':'failed','error':error})
+    return None,{'status':'review_failed_open','attempts':attempts,'error':error}
