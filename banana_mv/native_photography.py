@@ -125,9 +125,11 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
     from banana_mv.reference_bindings import reference_manifest
     refs=references if references is not None else reference_manifest(req.get('prompt',''),len(originals))
     expected_refs=[row['picture'] for row in refs]
+    guide_file=Path(cfg.get('guides',{}).get('ref') or '__missing_camera_guide__')
+    guide_text=guide_file.read_text(encoding='utf-8') if guide_file.is_file() else ''
     identity={'version':1,'compiled_sha256':digest(compiled),
               'beats_sha256':digest(local),
-              'guide_sha256':digest(Path(cfg['guides']['ref']).read_text(encoding='utf-8'))}
+              'guide_sha256':digest(guide_text)}
     saved=folder/f'{i:02d}_native_h3.json'
     if saved.is_file():
         try:
@@ -136,7 +138,7 @@ def enhance_window(cfg, req, seg, film, originals, compiled, rewrite, folder,
                 return _verify(cached['prompt'],seg['seconds'],required,expected_refs),None
         except (ValueError,KeyError,TypeError,OSError):
             pass
-    guide=_focused_guide(Path(cfg['guides']['ref']).read_text(encoding='utf-8'))
+    guide=_focused_guide(guide_text)
     # Restore the OLD specialist CAMERA ROLE, not the old oversized prompt.
     # One local passage plus focused official shot guidance; no full story.
     system=(NATIVE_ENHANCER_SYSTEM+guide+'\n'+NATIVE_FILMING_CONTRACT+
