@@ -88,6 +88,21 @@ class SourceDurationFinaleTests(unittest.TestCase):
             self.assertEqual(writer.call_count,1)
             self.assertEqual(json.loads(path.read_text())['version'],2)
 
+    def test_render_graph_reads_mode_without_invoking_old_ending(self):
+        from unittest.mock import patch
+        from banana_mv import server
+        from test_unified_direction import request
+        req=request(project_scope='full',director_version=2)
+        seg=dict(timeline()[0],
+                 direction_ending_contract=continuous_film_ending_contract(req,9),
+                 song_seconds=9,segment_count=3)
+        baseline=server.graph_options(req,seg['seconds'],seg)
+        with patch('banana_mv.mv_scope.clip_ending',
+                   side_effect=AssertionError('render entry must not recompute ending')):
+            rendered=server.graph_options(req,seg['seconds'],seg)
+        self.assertEqual(rendered,baseline)
+        self.assertIn('director_mode',rendered)
+
     def test_excerpt_never_receives_full_song_finale(self):
         contract=continuous_film_ending_contract({'project_scope':'excerpt'},58.5)
         self.assertFalse(contract['finish_work'])
