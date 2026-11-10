@@ -56,6 +56,8 @@ class RecipeRevisionTests(unittest.TestCase):
                         for i,s in enumerate(self.segments)],
             'images_comfy':['one.png'],'seed':42,
             'size':[854,480],'output_size':[854,480],'duration':9}
+        self.state_patch=patch.object(server,'RUNS',self.root)
+        self.state_patch.start();self.addCleanup(self.state_patch.stop)
         self.job['plan_revision']=server.plan_revision(self.job)
         self.base_revision=self.job['plan_revision']
         self.advice={'status':'advice_only','issues':[
@@ -68,8 +70,6 @@ class RecipeRevisionTests(unittest.TestCase):
         self.model=Mock(return_value=json.dumps({'beats':changed}))
         self.writer=Mock()
         self.cfg={'rewriter':{'max_length':8192}}
-        self.state_patch=patch.object(server,'RUNS',self.root)
-        self.state_patch.start();self.addCleanup(self.state_patch.stop)
         server.write_state(self.job)
 
     def stage(self):
