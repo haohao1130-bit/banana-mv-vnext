@@ -43,6 +43,37 @@ def ending_contract(req, total, segments=None):
             'instruction':scope_instruction+' Begin resolution by resolve_start_by, finish required action by settle_by, then sustain the terminal image through end_time. A short last interval completes an ending already underway; it must not introduce a new unresolved action or a last-second scene switch. Do not extend, replace or fade the source song.'}
 
 
+def continuous_film_ending_contract(req, total):
+    """Whole-film finale follows source time and the user's brief, never clip width.
+
+    Existing segmented/legacy projects continue to use ending_contract().
+    This contract is only selected for newly saved whole-film masters.
+    """
+    scope = validate_scope(req.get('project_scope', 'full'))
+    if scope == 'excerpt':
+        return ending_contract(req, total)
+    if not math.isfinite(total) or total <= 0:
+        raise ValueError('Whole-film duration must be positive and finite.')
+    return {
+        'project_scope': 'full', 'finish_work': True,
+        'finale_policy': 'source_duration_v2',
+        'resolve_start_by': round(total, 6),
+        'settle_by': round(total, 6), 'end_time': round(total, 6),
+        'short_tail_seconds': 0, 'hold_seconds': 0,
+        'instruction': (
+            'The complete song is the only timing boundary. Develop the entire '
+            'requested film across its source timeline, including every explicit '
+            'user-commissioned event window and final image. The user-specified '
+            'finale and last lyric timing take precedence. Finish the requested '
+            'result by the source end; do not create an artificial hold, move a '
+            'climax earlier, or resolve a story at each technical clip boundary. '
+            'The final beat may show active action if the brief requires it. '
+            'Never extend, fade or replace the source song.'
+        ),
+    }
+
+
+
 def validate_ending(raw, req, segments):
     """A new scoped plan must actually budget resolution and a terminal hold."""
     if 'project_scope' not in req:
@@ -72,6 +103,18 @@ def clip_ending(req, segment):
     start=segment['start'];end=start+segment['seconds']
     contract['is_last_source_interval']=segment['index']==segment.get('segment_count',1)-1
     if not contract['finish_work']:return contract
+    if contract.get('finale_policy')=='source_duration_v2':
+        if not contract['is_last_source_interval']:
+            return {'project_scope':'full','finish_work':False,'phase':'continuing',
+                    'finale_policy':'source_duration_v2',
+                    'instruction':'Film only this timed phase. Do not invent an ending at a technical clip boundary.'}
+        contract['phase']='finale'
+        contract['instruction']=(
+            'Film only the user-commissioned final source interval and its final '
+            'image. Follow the master timeline; no synthetic terminal hold or '
+            'replay of earlier decisive action. Preserve the original audio.'
+        )
+        return contract
     closing=segment.get('direction_ending_plan') or {}
     resolve_start=closing.get('start_time',contract['resolve_start_by'])
     contract['phase']=('continuing' if end<=resolve_start else
