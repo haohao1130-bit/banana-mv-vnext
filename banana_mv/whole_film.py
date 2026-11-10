@@ -359,6 +359,12 @@ Do not put punches, impacts, entrances, clothing changes, completed actions or
 future goals in exit_state; those are events in beats. Use a held defensive pose
 at the corner, not a sentence describing a punch landing.
 ongoing is present-tense movement PROSE, never a JSON true or false.
+event_progress.history lists events already authored, not an instruction to film them again.
+Understand their causes and effects, then write only this chapter's assigned events.
+next_chapter_context is read-only planning, never an instruction to stage it early.
+Intentional replay, flashback, repeated performance and rhythmic visual motifs are allowed:
+make their editorial intent explicit and preserve the present story state on returning.
+Accidental chronology reset is the problem, not repetition itself.
 Write ONLY this chapter's current events; future lyrics, finale and climax
 belong to later chapters. exit_state is the state at THIS boundary, not song end.
 Each beat must describe exactly ONE physical camera view at ONE location.
@@ -472,6 +478,12 @@ def _present_exit_state(value):
         result['scene_states']={name:_present_exit_state(state) for name,state in scenes.items()
                                 if isinstance(state,dict)}
     return result
+
+
+def event_progress(beats):
+    """Compact authored history, not previous prompts or a forbidden-event list."""
+    return [{'event_id':f"event_{b['at_ms']}",'at_ms':b['at_ms'],
+             'event':b['action'],'status':'already_authored'} for b in beats]
 
 
 def _ongoing_handoff(beat):
@@ -620,10 +632,13 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                           'chapters':[chapter]},
                  'chapter_index':index,'chapter':chapter,
                  'previous_exit_state':previous_exit,'previous_last_beat':previous_last,
-                 'song_duration_ms':duration_ms}
+                 'song_duration_ms':duration_ms,
+                 'event_progress':{'history':event_progress(assembled),
+                     'instruction':'History is context only, not shots to copy. Continue unfinished momentum. Intentional replay/flashback/motif is allowed when explicitly staged; do not reset story state accidentally.'},
+                 'next_chapter_context':spine['chapters'][index+1]['goal'] if not is_final else None}
         chapter_key=digest({'input_sha256':fingerprint,'chapter':chapter,
                             'previous_exit_state':previous_exit,'previous_last_beat':previous_last,
-                            'chapter_validator_version':4,'creative_contract':local_source.get('creative_contract')})
+                            'chapter_validator_version':5,'event_history_sha256':digest(event_progress(assembled)),'creative_contract':local_source.get('creative_contract')})
         piece=None
         if checkpoint.is_file():
             try:
@@ -682,7 +697,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
     # A saved v1/v2 master must keep its original fingerprint and finale rules.
     # Only fresh v3 masters use the source-duration finale policy.
-    saved_version=saved.get('version',1) if saved is not None else 6
+    saved_version=saved.get('version',1) if saved is not None else 7
     modern=saved_version>=2
     source={'brief':req.get('prompt',''),'duration_ms':duration_ms,
             'adaptation':adaptation_direction(req),
@@ -701,7 +716,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             render_windows=[{'index':s['index'],'start':s['start'],'seconds':s['seconds']} for s in segments])
     if saved_version>=4:
         source['creative_contract']=creative_contract(req.get('prompt',''))
-    if saved_version>=5:source['chapter_handoff_version']=4 if saved_version>=6 else 3
+    if saved_version>=5:source['chapter_handoff_version']=5 if saved_version>=7 else (4 if saved_version>=6 else 3)
     fingerprint=digest(source)
     from banana_mv.reference_bindings import reference_manifest, bind_definitions
     references=reference_manifest(req.get('prompt',''),len(originals))
@@ -783,7 +798,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
         except (ValueError,OSError):pass
     if (prior_review.get('version')==(5 if saved_version>=4 else 4) and prior_review.get('scope')=='whole_film'
-            and (saved_version<4 or prior_review.get('commission_policy_version')==2)
+            and (saved_version<4 or prior_review.get('commission_policy_version')==3)
             and prior_review.get('output_hash')==content_hash(film)
             and (prior_review.get('status')!='disabled' or not req.get('screenplay_review',True))):
         audit=prior_review

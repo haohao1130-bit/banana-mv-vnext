@@ -81,9 +81,13 @@ class CommissionTests(unittest.TestCase):
             ensure_film(cfg,req,segs,images,root,writer)
             local=json.loads(writer.call_args_list[1].args[2][0][1])
             self.assertEqual(local['source']['creative_contract']['macro_summary'],spine['creative_contract'])
+            following=json.loads(writer.call_args_list[2].args[2][0][1])
+            self.assertEqual([h['event_id'] for h in following['event_progress']['history']],['event_0'])
+            self.assertEqual(local['event_progress']['history'],[])
+            self.assertEqual(local['next_chapter_context'],spine['chapters'][1]['goal'])
             self.assertNotIn('brief',local['source'])
             saved=json.loads((root/'preproduction/whole_film.json').read_text())
-            self.assertEqual(saved['version'],6)
+            self.assertEqual(saved['version'],7)
             self.assertEqual(len(saved['film']['authoring_chapters']),2)
             self.assertTrue((root/'preproduction/creative_contract.json').exists())
             # Resume reuses its persisted master and leaves old checkpoints alone.
@@ -132,3 +136,25 @@ class CommissionTests(unittest.TestCase):
         self.assertIn('not a location lock',system)
         self.assertIn('physical countdown',system)
         self.assertIn('specific completed event and its original time',system)
+    def test_authored_history_is_context_and_repair_input_is_local(self):
+        from banana_mv.whole_film import event_progress, CHAPTER_SYSTEM
+        film=self.film();history=event_progress(film['beats'][:2])
+        self.assertEqual([h['event_id'] for h in history],['event_0','event_15000'])
+        self.assertNotIn('filming_prompt',history[0])
+        self.assertIn('Intentional replay',CHAPTER_SYSTEM)
+        source=self.source();source['creative_contract']['macro_summary']='UNTRUSTED_MACRO_CLAIM'
+        fixed=dict(film['beats'][1],filming_prompt='A specific fresh stage close-up.')
+        ticket={'target_chapter':1,'reason':'A source-required stage development is missing.',
+                'repair_instruction':'Develop the stage strand without resetting the ring state.'}
+        writer=Mock(side_effect=[json.dumps({'issues':[ticket]}),json.dumps({'beats':[fixed]}),'{"issues":[]}'])
+        with tempfile.TemporaryDirectory() as tmp:
+            result,audit=review_film({}, {},source,film,writer,[],tmp,parse_film)
+        review_payload=json.loads(writer.call_args_list[0].args[2][0][1])
+        self.assertNotIn('UNTRUSTED_MACRO_CLAIM',json.dumps(review_payload))
+        repair=writer.call_args_list[1]
+        payload=json.loads(repair.args[2][0][1])
+        self.assertEqual(len(payload['film']['beats']),1)
+        self.assertEqual(len(payload['clock']['timeline']),1)
+        self.assertLessEqual(repair.args[0]['rewriter']['max_length'],6144)
+        self.assertIn('Return only {"beats"',repair.args[1].split('FINAL DELIVERY CONTRACT:')[-1])
+        self.assertEqual(audit['status'],'passed')

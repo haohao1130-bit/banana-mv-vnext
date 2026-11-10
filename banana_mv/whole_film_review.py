@@ -182,7 +182,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
     current=copy.deepcopy(film)
     audit={'version':5 if source.get('creative_contract') else 4,'scope':'whole_film','status':'unchecked','rounds':0,
            'checks':[],'issues':[],'repairs':[],'format_attempts':[],'warnings':[],
-           'commission_policy_version':2}
+           'commission_policy_version':3}
     if not req.get('screenplay_review',True):
         audit['status']='disabled'
         audit['warnings'].append('Whole-film semantic review was disabled; this is not a QA pass.')
@@ -195,8 +195,15 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
         # Reviews return compact issues; full repairs retain the author's output budget.
         call_cfg.setdefault('rewriter',{})['max_length']=(max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
             if system.startswith('Repair ') else 4096)
+        if system.startswith('Repair ') and payload.get('target_chapter') is not None:
+            call_cfg['rewriter']['max_length']=min(6144,call_cfg['rewriter']['max_length'])
         if system.startswith('Repair '):
-            system+='\n'+photography_system(cfg)+'\n'+direction_system(source)
+            guide=photography_system(cfg)
+            if payload.get('target_chapter') is not None:
+                guide=guide.split('FINAL DELIVERY CONTRACT:',1)[0]
+            system+='\n'+guide+'\n'+direction_system(source)
+            if payload.get('target_chapter') is not None:
+                system+='\nFINAL DELIVERY CONTRACT: Return only {"beats":[replacement beats for editable_range]}. Preserve all unedited chapters. Return subject_definitions only for an explicitly reported identity-role conflict. Do not output the full film.'
         return _text(rewrite(call_cfg,system,[('text',json.dumps(payload,ensure_ascii=False))]+
                              _pictures(originals),uuid.uuid4().hex[:8]))
     try:
@@ -281,7 +288,8 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
                 try:
                     if progress:progress({'stage':'repair','round':round_index+1,'scope':record['scope'],'indices':group})
                     raw=call((GLOBAL_REPAIR_SYSTEM if global_repair else REPAIR_SYSTEM)+'\n'+OPTIONAL_TIMING_POLICY,{
-                        'source':source,'film':current,'clock':clock_context(current,source),'issues':reasons,
+                        'source':source,'film':(dict(current,beats=current['beats'][lo:hi+1]) if targeted else current),
+                        'clock':(dict(clock_context(current,source),timeline=clock_context(current,source)['timeline'][lo:hi+1]) if targeted else clock_context(current,source)),'issues':reasons,
                         'editable_range':{'first_index':lo,'last_index':hi,
                             'start_ms':current['beats'][lo]['at_ms'],'end_ms_exclusive':end},
                         'previous_beat':current['beats'][lo-1] if lo else None,
@@ -375,10 +383,15 @@ Match the chapter containing that time; do not pick Chapter 0 for a later-shot f
 Use {"issues":[]} only when all commissioned obligations are satisfied.
 Checklist: active strands and their required intercut relationship; scene-specific singer
 permissions and identity; commissioned causal milestones and ending; real timed camera cuts.
-If an explicitly commissioned ongoing strand disappears after chapter 0 for more than one
-chapter without a commission-consistent resolution, reject with evidence and select a suitable
-chapter to restore development. Do not demand each strand in every chapter, equal time or
-regular cuts. Longer uninterrupted passages and unequal irregular returns are valid.
+Evaluate commissioned strands by meaningful development and intended resolution
+across the work, not the number of absent chapters, scene proportions or return frequency.
+An opening mention alone may not fulfill a commissioned interwoven storyline;
+show the actual missing development and source evidence, not a chapter-count rule.
+Do not require equal time. Unequal screen time, irregular returns and long uninterrupted passages are valid.
+Intentional replay, flashback, repeated singing/dancing and rhythmic motifs are valid
+MV language. Do not reject them merely because an event or image occurred earlier.
+Report accidental re-execution as a NEW event or a contradictory chronology/state reset,
+not purposeful editorial reuse. Preserve commissioned repetition and director freedom.
 No split-screen or dual-panel. Different locations need separate timed beats and shot_ids.
 Inspect each beat's state AND filming prose: stage state cannot describe a ring action,
 and a single beat cannot contain a stage-to-ring cut. Shared identity definitions contain
@@ -402,12 +415,14 @@ REPAIR_SYSTEM += "\n"+COMMISSION_EVIDENCE_POLICY
 
 def commission_review(source, film, clock, call, folder, round_index, retries):
     """Bounded chapter tickets. Invalid/missing evidence is never a clean pass."""
+    from banana_mv.whole_film import event_progress
     attempts=[];error='';chapters=source['authoring_chapters']
     for attempt in range(min(2,max(0,int(retries)))+1):
         name=f'commission_review_{round_index:02d}_{attempt:02d}.txt'
         try:
             raw=call(COMMISSION_SYSTEM+ ('\nPrevious invalid delivery: '+error if error else ''),
-                {'original_brief':source.get('brief',''),'creative_contract':source['creative_contract'],
+                {'original_brief':source.get('brief',''),'creative_contract':{k:v for k,v in source['creative_contract'].items() if k!='macro_summary'},
+                 'event_progress':event_progress(film['beats']),
                  'authoring_chapters':[{'target_chapter':i,'start_ms':c['start_ms'],
                                         'end_ms':c['end_ms']} for i,c in enumerate(chapters)],'timeline':clock['timeline'],
                  'subject_definitions':film['subject_definitions'],'srt_cues':source.get('srt_cues',[])})
