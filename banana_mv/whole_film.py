@@ -338,6 +338,9 @@ this chapter's end). First beat at_ms MUST equal chapter.start_ms; all later
 beats are strictly increasing and less than chapter.end_ms. Every beat includes
 shot_id, state, continuation_state, camera, ongoing_camera, action, ongoing,
 mode, filming_prompt and ongoing_filming_prompt, all as nonempty strings.
+ongoing is present-tense movement PROSE, never a JSON true or false.
+Write ONLY this chapter's current events; future lyrics, finale and climax
+belong to later chapters. exit_state is the state at THIS boundary, not song end.
 Each beat is ONE view; only a real camera cut changes shot_id. Write detailed
 native H3 filming prose in the two filming_prompt fields, not a Shot list.
 The opening state inherits previous_exit_state; do not reset action, wardrobe,
@@ -403,30 +406,87 @@ def _validated_spine(data, duration_ms, chapter_boundaries_ms=None):
     return {'subject_definitions':definitions,'chapters':chapters}
 
 
+def _chapter_stable_cast(definitions, *, final=False):
+    """Strip future-duties text from macro cast while preserving identity."""
+    if final:
+        return definitions
+    try:
+        entries=json.loads(definitions)
+    except (ValueError,TypeError):
+        return definitions
+    if not isinstance(entries,list):
+        return definitions
+    keep=('id','name','label','description','reference','picture',
+          'appearance','vocal_role','scene','role')
+    return json.dumps([{k:v for k,v in row.items() if k in keep}
+                       if isinstance(row,dict) else row for row in entries],
+                      ensure_ascii=False)
+
+
+def _chapter_source(source, spine, chapter, *, final=False):
+    """Never send global lyric/SRT, the full brief or future acts to a chapter."""
+    start,end=chapter['start_ms']/1000,chapter['end_ms']/1000
+    cues=[]
+    for cue in source.get('srt_cues',[]):
+        if not isinstance(cue,dict):
+            continue
+        try:
+            a,b=float(cue['start']),float(cue['end'])
+        except (KeyError,ValueError,TypeError):
+            continue
+        if a<end and b>start:
+            cues.append(dict(cue,start=max(a,start),end=min(b,end)))
+    evidence=[]
+    for row in source.get('music_evidence',[]):
+        if not isinstance(row,dict):
+            continue
+        try:
+            a,b=float(row['source_start']),float(row['source_end'])
+        except (KeyError,ValueError,TypeError):
+            continue
+        if a<end and b>start:
+            evidence.append(row)
+    direction=source.get('direction') or {}
+    safe_direction={k:direction[k] for k in
+        ('selected_style','intensity','scene_recipes','excluded_modes',
+         'face_identity','user_role_declarations') if k in direction}
+    local={'chapter_start_ms':chapter['start_ms'],
+           'chapter_end_ms':chapter['end_ms'],'srt_cues':cues,
+           'music_evidence':evidence,
+           'subject_definitions':_chapter_stable_cast(spine['subject_definitions'],
+                                                     final=final),
+           'reference_manifest':source.get('reference_manifest',[]),
+           'direction':safe_direction,
+           'adaptation':source.get('adaptation','')}
+    if final:
+        local['ending']=source.get('ending',{})
+    return local
+
+
 def _validated_chapter(data, spine, chapter):
-    beats=data.get('beats')
-    if not isinstance(beats,list) or not beats:
-        raise ValueError('本章缺少 beats。')
+    raw=data.get('beats')
+    if not isinstance(raw,list) or not raw:
+        raise ValueError('本章缺少 beats，須只重寫本章。')
     start,end=chapter['start_ms'],chapter['end_ms']
-    # One surplus beat must NOT destroy a successfully generated JSON chapter.
-    # The end boundary belongs to the next chapter: keep a beat exactly on it
-    # only by clamping it to the final millisecond of this chapter.
-    cleaned=[]
-    for beat in beats:
-        if not isinstance(beat,dict) or type(beat.get('at_ms')) is not int:
-            continue
-        at=beat['at_ms']
-        if at<start or at>end:
-            continue
-        cleaned.append(dict(beat,at_ms=min(at,end-1)))
-    cleaned.sort(key=lambda b:b['at_ms'])
+    # A beat at end_ms belongs to the NEXT chapter; surplus beats are dropped.
+    spill=any(isinstance(b,dict) and type(b.get('at_ms')) is int
+              and b['at_ms']>=end for b in raw)
+    beats=[dict(b) for b in raw if isinstance(b,dict)
+           and type(b.get('at_ms')) is int and start<=b['at_ms']<end]
+    beats.sort(key=lambda b:b['at_ms'])
     unique=[]
-    for beat in cleaned:
+    for beat in beats:
         if unique and beat['at_ms']==unique[-1]['at_ms']:
             continue
+        # Qwen 9B actually returns ongoing: true/false in valid JSON.
+        ongoing=beat.get('ongoing')
+        if isinstance(ongoing,bool) or not isinstance(ongoing,str) or not ongoing.strip():
+            action=beat.get('action')
+            beat['ongoing']=action if isinstance(action,str) and action.strip() else 'underway'
         unique.append(beat)
     if not unique:
-        raise ValueError('本章沒有落在有效時間內的鏡頭，須只重寫本章。')
+        # Only genuinely unusable chapters need a bounded single-chapter retry.
+        raise ValueError('本章沒有有效的章內鏡頭，須只重寫本章。')
     if unique[0]['at_ms']!=start:
         unique[0]['at_ms']=start
     for beat in unique:
@@ -437,8 +497,14 @@ def _validated_chapter(data, spine, chapter):
     parse_film(json.dumps({'subject_definitions':spine['subject_definitions'],
                            'beats':relative},ensure_ascii=False),end-start)
     exit_state=data.get('exit_state')
+    if spill:
+        # Whole-song hallucinations contaminate the model's exit_state too.
+        # Derive the handoff from the latest LOCAL beat and macro chapter goal.
+        exit_state={'chapter_end_ms':end,
+                    'last_visible_state':unique[-1]['continuation_state'],
+                    'chapter_exit_target':chapter['exit_target']}
     if not isinstance(exit_state,(str,list,dict)) or not exit_state:
-        raise ValueError('本章沒有完整結尾狀態，無法交棒。')
+        raise ValueError('本章沒有結尾狀態，須只重寫本章。')
     return {'beats':unique,'exit_state':exit_state}
 
 
@@ -486,11 +552,17 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
     assembled=[];previous_exit=None;previous_last=None;receipts=[]
     for index,chapter in enumerate(spine['chapters']):
         checkpoint=folder/f'whole_film_chapter_{index:02d}.json'
-        payload={'source':writer_source,'spine':spine,'chapter_index':index,
-                 'chapter':chapter,'previous_exit_state':previous_exit,
-                 'previous_last_beat':previous_last,'song_duration_ms':duration_ms}
+        is_final=index==len(spine['chapters'])-1
+        local_source=_chapter_source(writer_source,spine,chapter,final=is_final)
+        payload={'source':local_source,
+                 'spine':{'subject_definitions':local_source['subject_definitions'],
+                          'chapters':[chapter]},
+                 'chapter_index':index,'chapter':chapter,
+                 'previous_exit_state':previous_exit,'previous_last_beat':previous_last,
+                 'song_duration_ms':duration_ms}
         chapter_key=digest({'input_sha256':fingerprint,'chapter':chapter,
-                            'previous_exit_state':previous_exit,'previous_last_beat':previous_last})
+                            'previous_exit_state':previous_exit,'previous_last_beat':previous_last,
+                            'chapter_validator_version':2})
         piece=None
         if checkpoint.is_file():
             try:
@@ -509,7 +581,13 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                 started=time.monotonic();request_id=uuid.uuid4().hex[:8]
                 prompt=dict(payload)
                 if error:prompt['previous_error']=error
-                raw=rewrite(stage_cfg,CHAPTER_SYSTEM+'\n'+COMPACT_H3_DIRECTOR_GUIDE,
+                scope=(f'This chapter ONLY covers {chapter["start_ms"]}ms to '
+                       f'{chapter["end_ms"]}ms. Do NOT write the ending or climax yet. '
+                       'Do NOT use lyrics or events from other chapters.\n'
+                       if not is_final else
+                       f'This chapter ONLY covers {chapter["start_ms"]}ms to '
+                       f'{chapter["end_ms"]}ms. The ending belongs HERE.\n')
+                raw=rewrite(stage_cfg,scope+CHAPTER_SYSTEM+'\n'+COMPACT_H3_DIRECTOR_GUIDE,
                             [('text',json.dumps(prompt,ensure_ascii=False))]+_pictures(originals),request_id)
                 (folder/f'whole_film_chapter_{index:02d}_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
                 try:
