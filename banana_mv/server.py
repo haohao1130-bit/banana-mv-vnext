@@ -85,7 +85,14 @@ def preflight(cfg, graph):
 def graph_options(req, seconds, segment=None):
     if req.get("realism_lora"):
         raise ValueError("fal 真人 LoRA 已移除；此舊專案曾啟用 fal，請另建不使用 fal 的專案，避免續跑混用設定。")
-    _, mode = director_prompt(req, seconds, segment)
+    # Rendering needs a mode only. Building the complete prose here would
+    # rerun clip_ending and potentially reintroduce the legacy per-clip finale.
+    if req.get('director_version',1) >= 2:
+        from banana_mv.director import resolve_modes
+        modes=resolve_modes(req,segment)
+        mode=modes[0] if modes else 'performance'
+    else:
+        _,mode=director_prompt(req,seconds,None)
     for field in ('acceleration', 'kitchen_attention', 'sparse_attention', 'motion_lora'):
         if field in req and not isinstance(req[field], bool):
             raise ValueError(field + ' 必須為布林值。')
