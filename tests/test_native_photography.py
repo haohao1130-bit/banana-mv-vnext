@@ -74,7 +74,7 @@ class NativeH3DirectorTests(unittest.TestCase):
     def test_full_official_guide_survives_even_after_six_thousand_chars(self):
         root,images,cfg,req,f,seg,compiled=self.fixture()
         guide=root/'guide.md'
-        full='OFFICIAL_NATIVE_GUIDE_MARKER\\n'+('H3 official reference guidance. '*220)+ '\\nMANDATORY_END_OF_GUIDE_SENTINEL'
+        full='OFFICIAL_NATIVE_GUIDE_MARKER\n'+('H3 official reference guidance. '*220)+ '\nMANDATORY_END_OF_GUIDE_SENTINEL'
         guide.write_text(full,encoding='utf-8')
         writer=Mock(return_value=native_delivery([0,3000]))
         result,warning=camera.enhance_window(cfg,req,seg,f,images,compiled,
@@ -83,7 +83,7 @@ class NativeH3DirectorTests(unittest.TestCase):
         self.assertIn('MANDATORY_END_OF_GUIDE_SENTINEL',writer.call_args.args[1])
         self.assertIn(full,writer.call_args.args[1])
         payload=json.loads(writer.call_args.args[2][0][1].split(
-            'Locked local filming commission:\\n',1)[1])
+            'Locked local filming commission:\n',1)[1])
         self.assertEqual(payload['locked_beats'][0]['at_ms'],0)
         self.assertNotIn('whole_song_brief',payload)
 
