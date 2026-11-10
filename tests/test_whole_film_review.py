@@ -93,4 +93,65 @@ class MasterReviewTests(unittest.TestCase):
             ensure_film(cfg,req,timeline(),images,root,writer)
             self.assertEqual(writer.call_count,2)
 
+
+class CompressedClockRegressionTests(unittest.TestCase):
+    def fixture(self):
+        raw=(Path(__file__).parent/'fixtures/whole_film_compressed_clock.json').read_text()
+        f=parse_film(raw,58500)
+        s={'brief':'0:00–0:16 opening exchanges; 0:31–0:43 pressure and observation; '
+                   '0:43–0:54.5 final setup; 0:54.5–ending the stage vocalist sings the last line.',
+           'duration_ms':58500,'lyrics':'','srt_cues':[]}
+        return f,s
+
+    def test_seconds_are_calculated_not_inferred_from_digits(self):
+        from banana_mv.whole_film_review import clock_context
+        f,s=self.fixture();before=copy.deepcopy(f);clock=clock_context(f,s)
+        self.assertEqual(clock['duration_seconds'],58.5)
+        self.assertFalse(clock['srt_provided'])
+        self.assertEqual(clock['timeline'][1]['start_seconds'],0.8)
+        self.assertEqual(clock['timeline'][-1]['start_seconds'],8)
+        self.assertEqual(clock['timeline'][-1]['end_seconds'],58.5)
+        self.assertEqual(clock['timeline'][-1]['span_seconds'],50.5)
+        self.assertEqual(f,before)  # No guessed timestamp scaling.
+
+    def test_no_srt_global_retiming_can_replace_all_beats_then_recheck(self):
+        f,s=self.fixture();replacement=copy.deepcopy(f['beats'])
+        times=[0,4000,16000,20000,28000,31000,36000,43000,54000,54500,55500]
+        for beat,at in zip(replacement,times):beat['at_ms']=at
+        replacement[-1]['state']='On the concert stage, the assigned vocalist sings the commissioned final line.'
+        writer=Mock(side_effect=['{"issues":[{"index":-1,"reason":"The final vocal action starts at 8 seconds instead of the explicit 54.5-second window; the whole timeline is compressed."}]}',
+                                json.dumps({'beats':replacement}),'{"issues":[]}'])
+        with tempfile.TemporaryDirectory() as tmp:
+            result,audit=review_film({}, {},s,f,writer,[],tmp,parse_film)
+        self.assertEqual(audit['status'],'passed');self.assertTrue(audit['repairs'][0]['accepted'])
+        self.assertEqual(audit['repairs'][0]['scope'],'whole_film')
+        self.assertEqual(result['beats'][-1]['at_ms'],55500)
+        self.assertEqual(f['beats'][-1]['at_ms'],8000)
+        payload=json.loads(writer.call_args_list[0].args[2][0][1])
+        self.assertEqual(payload['timeline'][-1]['start_seconds'],8)
+        self.assertEqual(payload['clock']['duration_seconds'],58.5)
+        self.assertEqual(writer.call_args_list[0].args[0]['rewriter']['max_length'],4096)
+        self.assertEqual(writer.call_args_list[1].args[0]['rewriter']['max_length'],16384)
+        self.assertEqual(json.loads(writer.call_args_list[2].args[2][0][1])['timeline'][-1]['at_ms'],55500)
+
+    def test_genuinely_local_edit_still_preserves_unflagged_neighbors(self):
+        f,s=self.fixture();replacement=copy.deepcopy(f['beats'][4])
+        replacement['action']='The challenger tests the opponent with a new feint.'
+        writer=Mock(side_effect=['{"issues":[{"index":4,"reason":"This action repeats its state instead of progressing."}]}',
+                                json.dumps({'beats':[replacement]}),'{"issues":[]}'])
+        with tempfile.TemporaryDirectory() as tmp:
+            result,audit=review_film({}, {},s,f,writer,[],tmp,parse_film)
+        self.assertEqual(audit['status'],'passed')
+        self.assertEqual(audit['repairs'][0]['scope'],'local')
+        self.assertEqual(result['beats'][:4],f['beats'][:4]);self.assertEqual(result['beats'][5:],f['beats'][5:])
+
+    def test_bad_global_repair_remains_nonblocking_and_warns(self):
+        f,s=self.fixture()
+        issue='{"issues":[{"index":-1,"reason":"The global clock is compressed."}]}'
+        writer=Mock(side_effect=[issue,'{"beats":[]}',issue])
+        with tempfile.TemporaryDirectory() as tmp:
+            result,audit=review_film({}, {'screenplay_repair_rounds':1},s,f,writer,[],tmp,parse_film)
+        self.assertEqual(result,f);self.assertEqual(audit['status'],'warnings')
+        self.assertFalse(audit['repairs'][0]['accepted']);self.assertEqual(writer.call_count,3)
+
 if __name__=='__main__':unittest.main()

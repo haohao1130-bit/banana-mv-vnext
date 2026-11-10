@@ -10,8 +10,16 @@ from banana_mv.review_output import reviewed_json, content_hash
 
 REVIEW_SYSTEM = '''Review the ENTIRE continuous shooting timeline against the original brief.
 Return only {"issues":[{"index":0,"reason":"evidence and minimum necessary correction"}]}.
-Indices refer to beats, NOT render clips. Use the supplied indexed timeline and
-absolute start/end milliseconds. The original brief's explicit event windows,
+Index -1 means the WHOLE FILM needs repair: use it for global clock compression,
+misplaced climax across multiple intervals, lost parallel storyline, or a shared
+role-table conflict. For a truly local flaw use its zero-based beat index.
+Do NOT report only index 0 for a problem involving the whole timeline.
+Read start_seconds/end_seconds, which the program calculated from at_ms/end_ms.
+Do not infer units from the number of digits: 800 ms = 0.8 seconds, NOT 8 seconds;
+8000 ms = 8 seconds, NOT 80 seconds. The last beat holds until the source end.
+A long final beat may contain an early climax even if the beat interval overlaps
+a late lyric. Match the described action's onset, not merely interval overlap.
+The source's duration_seconds is authoritative. Do not invent timeline ranges. The original brief's explicit event windows,
 reference identities, scene-specific vocal permissions and required outcome take
 priority over generated definitions and generic ending suggestions.
 Check for events performed before their commissioned interval, an early final
@@ -26,9 +34,12 @@ performance, reaction shots and motivated montage are allowed.
 Report only definite material contradictions, with supplied source evidence.
 No SRT is normal. Explicit user timing in the brief remains applicable without
 SRT. With SRT check explicit sung claims, not missing singing coverage.
-For a necessary retiming identify every beat whose content/timing must change;
-include a contradictory stable role table as an issue at index 0, with the exact
-role conflict. Return {"issues":[]} when there is no definite issue.
+For retiming that cannot fit inside the currently assigned neighboring beats,
+use index -1 so the editor can redistribute time across the complete source.
+For local fixes identify every neighboring beat that actually must change.
+Support every issue with actual supplied start_seconds and original user wording.
+"No SRT" does not erase time directives in the brief or imply missing lyrics.
+Never invent constraints (e.g. delaying discovery) contrary to the original brief. Return {"issues":[]} when there is no definite issue.
 Do not repair in this step.'''
 
 REPAIR_SYSTEM = '''Repair ONLY the assigned contiguous beat range of a continuous film.
@@ -49,6 +60,39 @@ a conflicting identity/scene/vocal binding. Change only that conflicting binding
 keep original reference mapping and all other roles intact.
 User-specified time windows override generic completion/hold suggestions.
 No new song, lyrics, speech or mandatory SRT coverage.'''
+
+
+GLOBAL_REPAIR_SYSTEM = """Repair the COMPLETE continuous film's timing and staging.
+Return JSON only: {"beats":[the complete repaired beat list]}.
+Use the original schema with integer at_ms; 1 second equals 1000 milliseconds.
+Start at 0, strictly increase, remain below source.duration_ms. The final beat
+continues to the actual source end. Preserve the user's story, identities,
+scene-specific vocal duties and explicit event windows. Generic ending advice
+never overrides explicit user timing. Keep valid actions and camera intentions;
+redistribute their times and expand underdeveloped action as necessary.
+A globally compressed clock is a whole-timeline repair, not a one-beat edit.
+Do not multiply all timestamps by a guessed scale or pad the rest with aftermath.
+Write the full duration as a film. Represent real edits with concrete timed views,
+without imposing a shot quota. Current state is not action or a plot recap.
+Do not make up lyrics, musical facts, sound effects or precise sung times when no
+such timing evidence is supplied. No SRT is normal and does not require singing
+coverage. The original brief's explicit time windows still govern the story.
+Optionally return subject_definitions only to correct a reported shared binding
+conflict; preserve the actual reference slots and every unaffected identity.
+Return the COMPLETE replacement timeline, not a change description."""
+
+
+def clock_context(film, source):
+    """Program-calculated display clocks for models; never retime the film."""
+    duration=source['duration_ms']
+    rows=[]
+    for i,beat in enumerate(film['beats']):
+        end=film['beats'][i+1]['at_ms'] if i+1<len(film['beats']) else duration
+        rows.append(dict(beat,index=i,end_ms=end,start_seconds=beat['at_ms']/1000,
+                         end_seconds=end/1000,span_seconds=(end-beat['at_ms'])/1000))
+    return {'duration_ms':duration,'duration_seconds':duration/1000,
+            'milliseconds_per_second':1000,'srt_provided':bool(source.get('srt_cues')),
+            'timeline':rows}
 
 
 def timed_issues(film, source):
@@ -73,7 +117,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
     folder=Path(work)/'preproduction'
     folder.mkdir(exist_ok=True)
     current=copy.deepcopy(film)
-    audit={'version':1,'scope':'whole_film','status':'unchecked','rounds':0,
+    audit={'version':2,'scope':'whole_film','status':'unchecked','rounds':0,
            'checks':[],'issues':[],'repairs':[],'format_attempts':[],'warnings':[]}
     if not req.get('screenplay_review',True):
         audit['status']='disabled'
@@ -81,22 +125,22 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
         audit['output_hash']=content_hash(current)
         return current,audit
     maximum=min(2,max(0,int(req.get('screenplay_repair_rounds',2))))
-    call_cfg=copy.deepcopy(cfg)
-    call_cfg.setdefault('rewriter',{})['max_length']=max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
     def call(system,payload):
+        call_cfg=copy.deepcopy(cfg)
+        # Reviews return compact issues; full repairs retain the author's output budget.
+        call_cfg.setdefault('rewriter',{})['max_length']=(max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
+            if system.startswith('Repair ') else 4096)
         return _text(rewrite(call_cfg,system,[('text',json.dumps(payload,ensure_ascii=False))]+
                              _pictures(originals),uuid.uuid4().hex[:8]))
-    def timeline():
-        return [dict(beat,index=i,end_ms=(current['beats'][i+1]['at_ms']
-                    if i+1<len(current['beats']) else source['duration_ms']))
-                for i,beat in enumerate(current['beats'])]
     try:
         for round_index in range(maximum+1):
             audit['rounds']=round_index+1
+            clock=clock_context(current,source)
             issues,formats=reviewed_json(REVIEW_SYSTEM+'\n'+OPTIONAL_TIMING_POLICY,
                 {'source':source,'subject_definitions':current['subject_definitions'],
-                 'timeline':timeline()},call,folder,f'film_review_{round_index:02d}',
-                set(range(len(current['beats']))),req.get('review_format_retries',2))
+                 'clock':{k:v for k,v in clock.items() if k!='timeline'},
+                 'timeline':clock['timeline']},call,folder,f'film_review_{round_index:02d}',
+                set(range(len(current['beats']))) | {-1},req.get('review_format_retries',2))
             audit['format_attempts'].append(formats)
             exact=timed_issues(current,source)
             audit['checks'].append({'round':round_index+1,'film_hash':content_hash(current),
@@ -114,20 +158,24 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
                 audit['status']='warnings'
                 audit['warnings'].append('Confirmed issues remain after bounded repairs; review before rendering.')
                 break
-            # Merge adjacent flagged beats; preserve every unflagged gap/neighbor.
+            global_repair=any(row['index']==-1 for row in issues)
             groups=[]
-            for idx in sorted({row['index'] for row in issues}):
-                if groups and idx==groups[-1][-1]+1:groups[-1].append(idx)
-                else:groups.append([idx])
-            # Descending edits keep original indices of earlier groups stable.
+            if global_repair:
+                groups=[list(range(len(current['beats'])))]
+            else:
+                for idx in sorted({row['index'] for row in issues}):
+                    if groups and idx==groups[-1][-1]+1:groups[-1].append(idx)
+                    else:groups.append([idx])
+            # Descending edits keep indices of earlier local groups stable.
             for group in reversed(groups):
                 lo,hi=group[0],group[-1]
                 end=current['beats'][hi+1]['at_ms'] if hi+1<len(current['beats']) else source['duration_ms']
-                reasons=[v for v in issues if v['index'] in group]
-                record={'round':round_index+1,'indices':group,'accepted':False}
+                reasons=issues if global_repair else [v for v in issues if v['index'] in group]
+                record={'round':round_index+1,'indices':group,'accepted':False,
+                        'scope':'whole_film' if global_repair else 'local'}
                 try:
-                    raw=call(REPAIR_SYSTEM+'\n'+OPTIONAL_TIMING_POLICY,{
-                        'source':source,'film':current,'issues':reasons,
+                    raw=call((GLOBAL_REPAIR_SYSTEM if global_repair else REPAIR_SYSTEM)+'\n'+OPTIONAL_TIMING_POLICY,{
+                        'source':source,'film':current,'clock':clock_context(current,source),'issues':reasons,
                         'editable_range':{'first_index':lo,'last_index':hi,
                             'start_ms':current['beats'][lo]['at_ms'],'end_ms_exclusive':end},
                         'previous_beat':current['beats'][lo-1] if lo else None,

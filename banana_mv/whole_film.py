@@ -24,7 +24,12 @@ Return JSON only:
  "mode":"performance, band, action, story or another supported director mode",
  "action":"new action starting at this global time",
  "ongoing":"only the motion or present activity that remains underway"}]}
-Use GLOBAL integer milliseconds. First beat starts at 0; later times strictly
+The supplied duration_ms is the WHOLE SONG's duration, not a clip length.
+Use GLOBAL integer milliseconds: 1 second = 1000 ms; 12.5 seconds = 12500 ms.
+Budget all events across that complete duration. Do not write a few seconds of
+story followed by a remaining long hold. Do not guess, rescale or compress the
+user's explicit time windows to fit a shorter timeline.
+First beat starts at 0; later times strictly
 increase and stay within source duration. Last beat lasts to the source end.
 Choose beats and shot lengths from events and music, never from a 10/15-second grid.
 Keep the same shot_id while one continuous camera view develops across beats;
@@ -203,7 +208,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
     if review_path.is_file():
         try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
         except (ValueError,OSError):pass
-    if (prior_review.get('version')==1 and prior_review.get('scope')=='whole_film'
+    if (prior_review.get('version')==2 and prior_review.get('scope')=='whole_film'
             and prior_review.get('output_hash')==content_hash(film)
             and (prior_review.get('status')!='disabled' or not req.get('screenplay_review',True))):
         audit=prior_review
