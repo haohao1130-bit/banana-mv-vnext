@@ -88,7 +88,7 @@ the user's input language.
 
 
 PHOTOGRAPHY = """You enhance reference-conditioned video prompts (Ref2VA), not synopsis prose.
-Apply the supplied official guide's reference labels and shot-writing language.
+Apply the compact H3 director guide and supplied reference labels.
 The transport is the timeline JSON schema above, NOT six headers in the JSON.
 The compiler emits the six sections after slicing; author their detailed_description
 NOW, for the whole film, before any slicing. In EVERY beat additionally return:
@@ -140,7 +140,12 @@ def photography_system(cfg):
     # Keep tiny custom guide notes for existing installations and fixtures.
     guide_path=cfg.get('guides',{}).get('ref')
     guide=Path(guide_path).read_text(encoding='utf-8') if guide_path and Path(guide_path).is_file() else ''
-    tiny_note=('\nInstallation note: '+guide) if 0<len(guide)<=256 and not re.search(r'^## \d+\.',guide,re.M) else ''
+    # Only the compact reference-label and camera chapters are safe here.
+    # A long human manual still gets zero injection into the 9B author.
+    if re.search(r'^## \d+\.',guide,re.M):
+        chapters=re.split(r'(?=^## \d+\.)',guide,flags=re.M)
+        guide='\n'.join(c for c in chapters if re.match(r'^## (?:2|5)\.',c))
+    tiny_note=('\nInstallation note: '+guide) if 0<len(guide)<=1024 else ''
     return COMPACT_H3_DIRECTOR_GUIDE+tiny_note+'\n'+PHOTOGRAPHY+'''
 FINAL DELIVERY CONTRACT: Return ONLY the JSON object with subject_definitions
 and beats. Every timed view belongs in beats. Never enumerate Shot appearances
@@ -385,25 +390,6 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
     """Two-level author: one macro spine, incremental chapter calls and checkpoints."""
     retries=rewrite_retry_count(req)
     spine_path=folder/'whole_film_spine.json'
-    def ask(system, payload, token_cap, label):
-        attempt_cfg=copy.deepcopy(writer_cfg)
-        attempt_cfg['rewriter']['max_length']=token_cap
-        error=''
-        for attempt in range(retries+1):
-            if progress:progress({'stage':'author','substage':label,'attempt':attempt+1})
-            started=time.monotonic()
-            request_id=uuid.uuid4().hex[:8]
-            text_payload=json.dumps(payload,ensure_ascii=False)
-            if error:text_payload+='\nPREVIOUS INVALID OUTPUT: '+error+'\nReturn a fresh complete JSON object.'
-            raw=rewrite(attempt_cfg,system,[('text',text_payload)]+_pictures(originals),request_id)
-            (folder/f'whole_film_{label}_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
-            try:
-                result=_json_object(raw)
-                return result,request_id,round(time.monotonic()-started,3)
-            except (ValueError,TypeError) as exc:
-                error=str(exc)
-                if attempt==retries:raise
-        raise ValueError('模型未能交付可解析的章節 JSON。')
     spine=None
     if spine_path.is_file():
         try:
@@ -528,7 +514,12 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             'source':writer_source,'render_windows':source.get('render_windows',[])})
         from banana_mv.local_guide import guide_record
         atomic_json(folder/'whole_film_guide.json',guide_record(cfg.get('guides',{}).get('ref','')))
-        (folder/'whole_film_commission.txt').write_text(system,encoding='utf-8')
+        use_chained=(duration_ms>30000 and req.get('authoring_mode',
+            cfg.get('rewriter',{}).get('whole_film_mode','chained'))=='chained')
+        actual_commission=(('CHAINED UPSTREAM AUTHORING\nMacro:\n'+SPINE_SYSTEM+
+            '\nChapter:\n'+CHAPTER_SYSTEM+'\n'+COMPACT_H3_DIRECTOR_GUIDE)
+            if use_chained else system)
+        (folder/'whole_film_commission.txt').write_text(actual_commission,encoding='utf-8')
         parts=[('text',json.dumps(writer_source,ensure_ascii=False))]+_pictures(originals)
         # Saved raw deliveries belong to this immutable job. Recover a complete
         # response before paying for another creative call; never close truncated JSON.
