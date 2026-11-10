@@ -1005,6 +1005,12 @@ class Handler(WebHandler):
 
 
 if __name__=='__main__':
+    # Local Windows setup only. Colab keeps its existing guide installation.
+    import os
+    if os.name=='nt':
+        from banana_mv.local_guide import ensure_local_guide
+        guide=ensure_local_guide(backend.load_config())
+        print('Ref2VA guide: '+json.dumps(guide,ensure_ascii=False),flush=True)
     backend.LIBRARY.mkdir(parents=True,exist_ok=True)
     # Selected images are restored by project_inputs(); audio_window() writes
     # the needed audio slice. Do not block startup copying the entire Drive library.

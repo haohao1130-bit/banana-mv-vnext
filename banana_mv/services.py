@@ -41,6 +41,11 @@ def load_config():
     for key in cfg['rewriter']:
         if key in saved.get('rewriter', {}):
             cfg['rewriter'][key] = saved['rewriter'][key]
+    # Existing explicit local files are supported; stale frontend paths are not.
+    override=os.environ.get('BANANA_REF_GUIDE') or saved.get('guides',{}).get('ref')
+    cached=DATA/'guides'/'VIDEO_PROMPT_WRITING_GUIDE_ref_en.md'
+    if override and Path(override).is_file():cfg['guides']['ref']=str(Path(override).resolve())
+    elif not Path(cfg['guides']['ref']).is_file():cfg['guides']['ref']=str(cached)
     return cfg
 
 

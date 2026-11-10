@@ -303,6 +303,8 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         writer_source={k:v for k,v in source.items() if k!='render_windows'}
         atomic_json(folder/'whole_film_input.json',{'version':2,'input_sha256':fingerprint,
             'source':writer_source,'render_windows':source.get('render_windows',[])})
+        from banana_mv.local_guide import guide_record
+        atomic_json(folder/'whole_film_guide.json',guide_record(cfg.get('guides',{}).get('ref','')))
         (folder/'whole_film_commission.txt').write_text(system,encoding='utf-8')
         parts=[('text',json.dumps(writer_source,ensure_ascii=False))]+_pictures(originals)
         # Saved raw deliveries belong to this immutable job. Recover a complete
