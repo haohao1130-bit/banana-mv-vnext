@@ -11,7 +11,7 @@ from pathlib import Path
 from banana_mv.core import normalize_mv_prompt
 from banana_mv.scene_state import atomic_json, digest
 from banana_mv.shoot_plan import _text, validate_native_mv_format
-from banana_mv.whole_film import _json_object, compile_window, parse_film
+from banana_mv.whole_film import _json_object, compile_window, parse_film, window
 from banana_mv.director import MODES
 
 
@@ -79,20 +79,46 @@ def _write_text(path, value):
         temp.unlink(missing_ok=True)
 
 
-def _compiled(film, job, folder):
+def _compiled(film, job, folder, *, cfg=None, rewrite=None, originals=None, staging=None, original=None):
     from banana_mv.reference_bindings import reference_manifest
     references=reference_manifest(job['request'].get('prompt',''),
                                   len(job.get('images_comfy',[])))
     req=job['request']
     plan=json.loads((folder.parent/'director_plan.json').read_text(encoding='utf-8'))
     plan['shared_setup']=film['subject_definitions']
-    output={}
+    old_camera_warnings=set()
+    for path in folder.glob('*_native_h3_warning.json'):
+        try:old_camera_warnings.add(json.loads(path.read_text(encoding='utf-8')).get('warning',''))
+        except (ValueError,OSError):pass
+    output={};camera_artifacts={}
+    native_warnings=[]
     for seg in job['segments']:
         i=seg['index']
         text,rows=compile_window(film,seg,
             chain=req.get('mode')=='chain',
             face_identity=req.get('face_identity',True),
             reference_manifest=references)
+        if req.get('native_camera_version') in (1,2):
+            start=round(seg['start']*1000);end=round((seg['start']+seg['seconds'])*1000)
+            unchanged=(original is not None and original['subject_definitions']==film['subject_definitions']
+                       and window(original,start,end)==window(film,start,end))
+            if unchanged:
+                # Keep accepted photography byte-for-byte; do not send unaffected
+                # windows back through either the compiler or the model.
+                text=(folder/f'{i:02d}_prompt.txt').read_text(encoding='utf-8')
+                warning_path=folder/f'{i:02d}_native_h3_warning.json'
+                if warning_path.is_file():
+                    native_warnings.append(json.loads(warning_path.read_text(encoding='utf-8')).get('warning',''))
+            else:
+                from banana_mv.native_photography import direct_window
+                camera_folder=staging/'native_camera';camera_folder.mkdir(exist_ok=True)
+                text,warning=direct_window(cfg,req,seg,film,originals or [],rewrite,camera_folder,
+                                           references=references)
+                if warning:native_warnings.append(warning)
+                for suffix in ('json','warning.json','delivery.json'):
+                    name=f'{i:02d}_native_h3'+('.json' if suffix=='json' else '_'+suffix)
+                    artifact=camera_folder/name
+                    camera_artifacts[name]=artifact.read_text(encoding='utf-8') if artifact.is_file() else None
         text=normalize_mv_prompt(text,len(job['images_comfy'])+
                                  int(req.get('mode')=='chain' and i>0))
         validate_native_mv_format(text,seg['seconds'],require_native=True)
@@ -105,10 +131,11 @@ def _compiled(film, job, folder):
     complete,_=compile_window(film,{'index':0,'start':0,'seconds':total/1000},
                                face_identity=req.get('face_identity',True),
                                reference_manifest=references)
-    return plan,output,complete
+    plan['quality_warnings']=list(dict.fromkeys([v for v in (plan.get('quality_warnings') or []) if v not in old_camera_warnings]+[v for v in native_warnings if v]))
+    return plan,output,complete,camera_artifacts
 
 
-def draft(work, job, cfg, rewrite, advice, base_revision):
+def draft(work, job, cfg, rewrite, advice, base_revision, originals=None):
     """Generate a candidate without mutating official manuscript, prompts or job."""
     folder=Path(work)/'preproduction'
     master=json.loads((folder/'whole_film.json').read_text(encoding='utf-8'))
@@ -165,7 +192,8 @@ def draft(work, job, cfg, rewrite, advice, base_revision):
     candidate=parse_film(json.dumps(candidate,ensure_ascii=False),duration)
     if digest(candidate)==digest(original):
         raise ValueError('本次修訂沒有改變丹方；原稿保留。')
-    plan,prompts,full_prompt=_compiled(candidate,job,folder)
+    plan,prompts,full_prompt,camera_artifacts=_compiled(candidate,job,folder,cfg=cfg,rewrite=rewrite,
+        originals=originals,staging=staging,original=original)
     # An AI-generated change has NOT passed the previous global QA.
     # Preserve the earlier audit in the adoption backup and surface a warning.
     plan['quality_status']='user_revision_unreviewed'
@@ -187,7 +215,7 @@ def draft(work, job, cfg, rewrite, advice, base_revision):
             'base_master_hash':digest(original),'candidate_master_hash':digest(candidate),
             'master':dict(master,film=candidate,quality_status='user_revision_unreviewed'),
             'plan':plan,'prompts':{str(k):v for k,v in prompts.items()},
-            'full_prompt':full_prompt,'preview':preview,
+            'full_prompt':full_prompt,'preview':preview,'camera_artifacts':camera_artifacts,
             'original_hash':digest(before_plan)}
     atomic_json(staging/'candidate.json',result)
     return {'status':'ready','id':id_,'base_revision':base_revision,
@@ -227,6 +255,8 @@ def accept(work, job, revision, write_state, plan_revision):
     for seg in job['segments']:
         i=seg['index']
         paths[folder/f'{i:02d}_prompt.txt']=candidate['prompts'][str(i)]
+    for name,value in candidate.get('camera_artifacts',{}).items():
+        paths[folder/name]=value
     backups={p:(p.read_bytes() if p.is_file() else None) for p in paths}
     archive=folder/'recipe_revisions'/revision/'originals'
     archive.mkdir(exist_ok=True)
@@ -236,7 +266,8 @@ def accept(work, job, revision, write_state, plan_revision):
     previous=copy.deepcopy(job)
     try:
         for p,value in paths.items():
-            _write_text(p,value)
+            if value is None:p.unlink(missing_ok=True)
+            else:_write_text(p,value)
         job['plan_preview_setup']=candidate['plan']['shared_setup']
         for seg in job['segments']:
             idx=seg['index']

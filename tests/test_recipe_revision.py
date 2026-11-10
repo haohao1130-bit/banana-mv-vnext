@@ -167,3 +167,64 @@ class RecipeRevisionTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+class NativeRecipeRevisionTests(unittest.TestCase):
+    camera_version=1
+    setUp=RecipeRevisionTests.setUp
+    def test_native_revision_enhances_only_changed_windows_then_adopts_exact_output(self):
+        from PIL import Image
+        from banana_mv.native_photography import _cut_times
+        from banana_mv.whole_film import window
+        from test_native_photography import native_delivery
+        self.job['request'].update(native_camera_version=self.camera_version,rewrite_retries=0,mode='chain')
+        image=self.work/'ref.png';Image.new('RGB',(8,8),'red').save(image)
+        guide=self.work/'guide.md';guide.write_text('OFFICIAL full guide '+('camera composition '*400))
+        self.cfg['guides']={'ref':str(guide)}
+        # Give unaffected segments distinctive accepted camera prose to preserve.
+        original_prompts={}
+        for seg in self.job['segments']:
+            prompt='UNCHANGED_NATIVE_'+str(seg['index'])+'\n'+(self.folder/f'{seg["index"]:02d}_prompt.txt').read_text()
+            # Keep native section order valid: marker goes into a descriptive section.
+            prompt=prompt.replace('UNCHANGED_NATIVE_'+str(seg['index'])+'\n','').replace('summary:\n','summary:\nUNCHANGED_NATIVE_'+str(seg['index'])+' ')
+            (self.folder/f'{seg["index"]:02d}_prompt.txt').write_text(prompt)
+            original_prompts[seg['index']]=prompt
+        self.job['plan_revision']=server.plan_revision(self.job)
+        changed=copy.deepcopy(self.film['beats'][:2]);changed[0]['action']='Newly discovered obstacle'
+        changed[0]['filming_prompt']='New obstacle in a low shot.'
+        calls=[]
+        def writer(cfg,system,parts,id_):
+            calls.append(system)
+            if system.startswith('Revise ONLY'):return json.dumps({'beats':changed})
+            payload=json.loads(parts[0][1].split('Locked local filming commission:\n')[1])
+            return native_delivery(payload['required_cuts_ms'])
+        result=revisions.draft(self.work,self.job,self.cfg,writer,self.advice,self.job['plan_revision'],originals=[image])
+        self.assertEqual(len(calls),2)  # one local story edit, one affected window camera call
+        saved=json.loads((self.folder/'recipe_revisions'/result['id']/'candidate.json').read_text())
+        self.assertIn('Camera starts low',saved['prompts']['0'])
+        self.assertEqual(saved['prompts']['1'],original_prompts[1])
+        self.assertEqual(saved['prompts']['2'],original_prompts[2])
+        self.assertEqual((self.folder/'00_prompt.txt').read_text(),original_prompts[0])
+        self.job['recipe_revision']=result
+        updated=revisions.accept(self.work,self.job,result['id'],server.write_state,server.plan_revision)
+        self.assertEqual(updated['segments'][0]['prompt'],saved['prompts']['0'])
+        self.assertEqual((self.folder/'01_prompt.txt').read_text(),original_prompts[1])
+        delivery=json.loads((self.folder/'00_native_h3_delivery.json').read_text())
+        self.assertEqual(delivery['status'],'native')
+    def test_failed_native_revision_warns_and_leaves_active_prompt_untouched(self):
+        from PIL import Image
+        self.job['request'].update(native_camera_version=self.camera_version,rewrite_retries=0)
+        image=self.work/'ref.png';Image.new('RGB',(8,8),'red').save(image)
+        guide=self.work/'guide.md';guide.write_text('FULL GUIDE')
+        self.cfg['guides']={'ref':str(guide)}
+        changed=copy.deepcopy(self.film['beats'][:2]);changed[0]['action']='New obstacle'
+        changed[0]['filming_prompt']='New obstacle close up.'
+        original=(self.folder/'00_prompt.txt').read_bytes()
+        writer=Mock(side_effect=[json.dumps({'beats':changed}),RuntimeError('text backend offline')])
+        result=revisions.draft(self.work,self.job,self.cfg,writer,self.advice,self.base_revision,originals=[image])
+        candidate=json.loads((self.folder/'recipe_revisions'/result['id']/'candidate.json').read_text())
+        self.assertTrue(any('text backend offline' in w for w in candidate['plan']['quality_warnings']))
+        self.assertEqual((self.folder/'00_prompt.txt').read_bytes(),original)
+
+
+class ClassicMVRevisionTests(NativeRecipeRevisionTests):
+    camera_version=2

@@ -228,6 +228,12 @@ def preview(job,work):
     folder=Path(work)/'preproduction'
     if not job.get('request',{}).get('vnext_preproduction') or not (folder/'ready.json').is_file():return job
     warnings=[]
+    plan_path=Path(work)/'director_plan.json'
+    if plan_path.is_file():
+        try:
+            plan=json.loads(plan_path.read_text(encoding='utf-8'))
+            warnings.extend(plan.get('quality_warnings') or [])
+        except (ValueError,OSError):pass
     global_path=Path(work)/'screenplay_review.json'
     if global_path.is_file():
         try:
@@ -244,9 +250,14 @@ def preview(job,work):
         except (ValueError,OSError):warnings.append('攝影審稿紀錄無法讀取。')
     job['quality_warnings']=warnings
     for seg in job['segments']:
+        delivery=folder/f'{seg["index"]:02d}_native_h3_delivery.json'
+        if delivery.is_file():
+            try:seg['native_camera']=json.loads(delivery.read_text(encoding='utf-8'))
+            except (ValueError,OSError):pass
         path=folder/f'{seg["index"]:02d}_prompt.txt'
         if not seg.get('prompt') and path.is_file():
             seg['prompt']=path.read_text(encoding='utf-8')
             seg['prompt_prepared']=True
     return job
+
 

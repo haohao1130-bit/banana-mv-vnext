@@ -225,6 +225,29 @@ def _json_object(raw):
     if not isinstance(data,dict):raise ValueError('全曲攝影稿需為 JSON 物件。')
     return data
 
+def _spine_delivery(raw):
+    """Recover an early root close before chapters; never invent missing content.
+
+    Real 9B deliveries sometimes close the root after creative_contract and then
+    append ,"chapters": [...]} outside it. Join only that exact complete suffix
+    and require strict JSON parsing of the result. Other malformed output retries.
+    """
+    data=_json_object(raw)
+    if 'chapters' in data or 'beats' in data:return data,None
+    text=_text(raw).strip()
+    fenced=re.search(r'^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$',text,re.I)
+    if fenced:text=fenced.group(1).strip()
+    start=text.find('{');text=text[start:]
+    _,end=json.JSONDecoder().raw_decode(text)
+    suffix=text[end:].strip()
+    if re.match(r'^,?\s*"chapters"\s*:\s*\[',suffix):
+        joined=text[:end].rstrip()[:-1].rstrip()+','+suffix.lstrip(',').lstrip()
+        repaired=json.loads(joined)
+        if isinstance(repaired.get('chapters'),list):
+            return repaired,'joined_chapters_after_early_root_close'
+    return data,None
+
+
 def parse_film(raw, duration_ms):
     data=_json_object(raw)
     data['subject_definitions']=definition_text(data.get('subject_definitions'))
@@ -612,7 +635,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
         # Macro inference is deliberately smaller than a full-camera-script call.
         macro_cfg=copy.deepcopy(writer_cfg)
         macro_cfg['rewriter']['max_length']=min(3072,max(2048,int(cfg.get('rewriter',{}).get('max_length',8192))))
-        error=''
+        error='';spine_attempts=[]
         for attempt in range(retries+1):
             if progress:progress({'stage':'author','substage':'spine','attempt':attempt+1})
             request_id=uuid.uuid4().hex[:8]
@@ -620,18 +643,28 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
             prompt=json.dumps(macro_source,ensure_ascii=False)
             if error:prompt+='\nPREVIOUS INVALID SPINE: '+error
             raw=rewrite(macro_cfg,SPINE_SYSTEM,[('text',prompt)]+_pictures(originals),request_id)
-            (folder/f'whole_film_spine_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
+            raw_name=f'whole_film_spine_raw_{uuid.uuid4().hex[:8]}.txt'
+            (folder/raw_name).write_text(raw,encoding='utf-8')
+            record={'attempt':attempt+1,'raw_file':raw_name,'request_id':request_id}
+            spine_attempts.append(record)
             try:
-                data=_json_object(raw)
+                data,format_repair=_spine_delivery(raw)
+                record['format_repair']=format_repair
                 if 'beats' in data:
                     # Compatibility: an existing model/fixture may deliver a
                     # valid full script directly; do not pay for another call.
-                    return parse_film(raw,duration_ms)
+                    film=parse_film(raw,duration_ms)
+                    record['status']='valid'
+                    atomic_json(folder/'whole_film_spine_attempts.json',{'attempts':spine_attempts})
+                    return film
                 spine=_validated_spine(data,duration_ms,chapter_edges)
                 atomic_json(spine_path,{'input_sha256':fingerprint,'spine':spine})
+                record['status']='valid'
+                atomic_json(folder/'whole_film_spine_attempts.json',{'attempts':spine_attempts})
                 break
             except (ValueError,TypeError,KeyError) as exc:
-                error=str(exc)
+                error=str(exc);record.update(status='invalid',error=error)
+                atomic_json(folder/'whole_film_spine_attempts.json',{'attempts':spine_attempts})
                 if attempt==retries:raise
     assembled=[];previous_exit=None;previous_last=None;receipts=[]
     for index,chapter in enumerate(spine['chapters']):
@@ -708,7 +741,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
     # A saved v1/v2 master must keep its original fingerprint and finale rules.
     # Only fresh v3 masters use the source-duration finale policy.
-    saved_version=saved.get('version',1) if saved is not None else 8
+    saved_version=saved.get('version',1) if saved is not None else (9 if req.get('mv_director_version')==1 else 8)
     modern=saved_version>=2
     source={'brief':req.get('prompt',''),'duration_ms':duration_ms,
             'adaptation':adaptation_direction(req),
@@ -729,6 +762,10 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         source['creative_contract']=creative_contract(req.get('prompt',''))
     if saved_version>=5:source['chapter_handoff_version']=6 if saved_version>=8 else (5 if saved_version>=7 else (4 if saved_version>=6 else 3))
     if saved_version>=8:source['vocal_reference_policy_version']=2
+    if saved_version>=9:
+        from banana_mv.classic_mv import ending
+        source['mv_director_version']=1
+        source['ending']=ending(req,segments)
     fingerprint=digest(source)
     from banana_mv.reference_bindings import reference_manifest, bind_definitions
     references=reference_manifest(req.get('prompt',''),len(originals))
@@ -753,12 +790,17 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         actual_commission=(('CHAINED UPSTREAM AUTHORING\nMacro:\n'+SPINE_SYSTEM+
             '\nChapter:\n'+CHAPTER_SYSTEM+'\n'+COMPACT_H3_DIRECTOR_GUIDE)
             if use_chained else system)
+        if saved_version>=9:
+            actual_commission='CLASSIC MUSIC-LED MV: one whole-song allocation, then isolated native photography.\nActual allocation inputs and deliveries: mv_allocation/\nNo Macro Spine or chained chapter camera generation is called.'
         (folder/'whole_film_commission.txt').write_text(actual_commission,encoding='utf-8')
         parts=[('text',json.dumps(writer_source,ensure_ascii=False))]+_pictures(originals)
         # Saved raw deliveries belong to this immutable job. Recover a complete
         # response before paying for another creative call; never close truncated JSON.
         film=None;recovery=[]
-        for candidate in sorted(folder.glob('whole_film_raw_*.txt'),key=lambda p:p.stat().st_mtime):
+        if saved_version>=9:
+            from banana_mv.classic_mv import author
+            film=author(cfg,req,segments,originals,folder,rewrite,progress)
+        for candidate in ([] if film is not None else sorted(folder.glob('whole_film_raw_*.txt'),key=lambda p:p.stat().st_mtime)):
             try:
                 film=parse_film(candidate.read_text(encoding='utf-8'),duration_ms)
                 recovery.append({'raw_file':candidate.name,'accepted':True})
@@ -837,11 +879,20 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
                                     face_identity=req.get('face_identity',True),reference_manifest=references)
         (folder/'whole_film_prompt.txt').write_text(full_prompt,encoding='utf-8')
     rows=[]
+    native_warnings=[]
     from banana_mv.shoot_plan import validate_native_mv_format
     from banana_mv.core import normalize_mv_prompt
     for seg in segments:
         text,local=compile_window(film,seg,chain=req.get('mode')=='chain',face_identity=modern and req.get('face_identity',True),reference_manifest=references if modern else None)
         old_prompt=folder/f'{seg["index"]:02d}_prompt.txt'
+        if modern and req.get('native_camera_version') in (1,2):
+            # Freeze the whole-song screenplay before asking the OLD native
+            # camera director to improve coverage of this one local window.
+            # It uses the official H3 guide; no storyline reconstruction.
+            from banana_mv.native_photography import direct_window
+            text,warn=direct_window(cfg,req,seg,film,originals,rewrite,folder,
+                                    references=references,progress=progress)
+            if warn:native_warnings.append(warn)
         if not modern and old_prompt.is_file():text=old_prompt.read_text(encoding='utf-8')
         text=normalize_mv_prompt(text,len(originals)+int(req.get('mode')=='chain' and seg['index']>0))
         validate_native_mv_format(text,seg['seconds'],require_native=True)
@@ -854,7 +905,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
                      'event':'\n'.join(r['state']+' '+r['action'] for r in local)})
     plan={'version':5,'shared_setup':film['subject_definitions'],'segments':rows,
           'ending_contract':source['ending'],'whole_film_version':1,'visual_verified':False,
-          'quality_status':audit['status'],'quality_warnings':audit.get('warnings',[])}
+          'quality_status':audit['status'],'quality_warnings':audit.get('warnings',[])+native_warnings}
     atomic_json(Path(work)/'director_plan.json',plan)
     atomic_json(folder/'whole_film_windows.json',{'version':6,'clip_count':len(segments),'whole_film_version':1})
     return plan
