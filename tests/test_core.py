@@ -1,6 +1,7 @@
 import json
 import math
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,22 @@ from banana_mv.core import (assemble, audio_window, build_workflow, command, dim
 
 
 class TimelineTests(unittest.TestCase):
+    def test_command_decodes_utf8_independently_of_windows_locale(self):
+        # ffprobe emits UTF-8 JSON, including metadata outside a CP950 codepage.
+        payload=json.dumps({'title':'中文歌曲 🎵 café'},ensure_ascii=False)
+        source='import sys; sys.stdout.buffer.write('+repr(payload.encode('utf-8'))+')'
+        self.assertEqual(json.loads(command([sys.executable,'-c',source])),{'title':'中文歌曲 🎵 café'})
+        invalid='import sys; sys.stdout.buffer.write(b"ok\\xff")'
+        self.assertEqual(command([sys.executable,'-c',invalid]),'ok\ufffd')
+
+    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'),'FFmpeg required')
+    def test_probe_preserves_unicode_song_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            song=Path(tmp)/'中文歌曲.mka'
+            command(['ffmpeg','-y','-v','error','-f','lavfi','-i','sine=duration=0.1',
+                     '-metadata','title=中文歌曲 🎵 café','-c:a','pcm_s16le',song])
+            self.assertEqual(probe(song)['format']['tags']['title'],'中文歌曲 🎵 café')
+
     def test_face_identity_binding_is_idempotent_and_keeps_user_text(self):
         from banana_mv.core import enforce_face_identity, normalize_mv_prompt
         original='summary:\n@圖片2 is scenery; <Audio 1>: fully_copy'

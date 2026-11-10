@@ -77,7 +77,20 @@ async function submit(){uploads.length=0;await els.form.onsubmit({preventDefault
 
   vm.runInContext("renderProgress({status:'running',segments:[{status:'generating'},{},{},{}]})",context);assert.equal(els.progress.value,0);assert.equal(els.progress.max,4);assert.equal(els['progress-label'].textContent,'整體完成 0／4 段（0%）');assert.equal(els['current-activity'].hidden,false);assert(els['activity-text'].textContent.includes('第 1／4 段 · 影片採樣中'));
   vm.runInContext("renderProgress({status:'running',segments:[{status:'done'},{status:'rewriting'},{},{}]})",context);assert.equal(els.progress.value,1);assert(els['progress-label'].textContent.includes('25%'));assert(els['activity-text'].textContent.includes('9B 當段自動導演'));
-  for(const [status,word] of [['analyzing_audio','分析整首音樂'],['planning_story','規劃全曲事件'],['assembling','合成原曲']]){vm.runInContext(`renderProgress({status:'${status}',segments:[{status:'done'}]})`,context);assert(els['activity-text'].textContent.includes(word));}
+  for(const [status,word] of [['analyzing_audio','分析整首音樂'],['planning_story','全曲故事與攝影稿'],['assembling','合成原曲']]){vm.runInContext(`renderProgress({status:'${status}',segments:[{status:'done'}]})`,context);assert(els['activity-text'].textContent.includes(word));}
+  vm.runInContext("renderProgress({status:'planning_story',planning_progress:{stage:'review',round:2,max_rounds:3,started_at:Date.now()/1000-75},segments:[{},{},{}]})",context);
+  assert(!els['progress-label'].textContent.includes('0%'));assert(els['progress-label'].textContent.includes('1 分'));
+  assert(els['activity-text'].textContent.includes('第 2／3 輪'));assert.equal(els.progress.value,undefined);
+  vm.runInContext("renderFurnace({status:'planning_story',planning_progress:{stage:'author'}})",context);
+  assert.equal(els.furnace['data-phase'],'author');assert(els['furnace-detail'].textContent.includes('眼鏡趕稿'));
+  vm.runInContext("renderFurnace({status:'planning_story',planning_progress:{stage:'repair'}})",context);
+  assert.equal(els.furnace['data-phase'],'repair');
+  vm.runInContext("renderProgress({status:'plan_ready',segments:[{},{}]});renderFurnace({status:'plan_ready'})",context);
+  assert.equal(els.progress.value,1);assert(els['progress-label'].textContent.includes('丹方已備妥'));
+  assert.equal(els.furnace['data-phase'],'ready');assert.equal(els.furnace['data-state'],'paused');
+  vm.runInContext("renderFurnace({status:'running',segments:[{status:'preparing'}]})",context);
+  assert.equal(els.furnace['data-state'],'loading');assert(els['furnace-title'].textContent.includes('投藥'));
+  vm.runInContext("renderFurnace({status:'running',segments:[{status:'generating'}]})",context);assert.equal(els.furnace['data-state'],'working');
   for(const status of ['done','error','cancelled','interrupted']){vm.runInContext(`renderProgress({status:'${status}',segments:[]})`,context);assert.equal(els['current-activity'].hidden,true);assert.equal(els['activity-text'].textContent,'');assert(!els['progress-label'].textContent.includes('NaN'));}
 
   vm.runInContext("renderEventPlan({segments:[{index:0,director_plan:{mode:'story',event:'<b>plain text</b>'}}]})",context);assert.equal(els['event-plan-text'].textContent,'1. story\n<b>plain text</b>');assert.equal(els['event-plan-details'].hidden,false);assert.equal(vm.runInContext("eventPreview('x'.repeat(800)).length",context),101);
@@ -202,8 +215,53 @@ async function submit(){uploads.length=0;await els.form.onsubmit({preventDefault
   await els['approve-recipe'].onclick();assert.deepEqual(approvals,[{id:'recipe123',revision:'recipe-v1'}]);
   assert.equal(els['recipe-review'].hidden,true);await els['approve-recipe'].onclick();assert.equal(approvals.length,1);
   vm.runInContext('busy(false)',context);
+  vm.runInContext("renderEventPlan({status:'plan_ready',segments:[{index:0,director_plan:{mode:'story',event:'one copy'}}]})",context);
+  assert.equal(els['event-plan-details'].hidden,true);
+  vm.runInContext("renderEventPlan({status:'done',segments:[{index:0,director_plan:{mode:'story',event:'one copy'}}]})",context);
+  assert.equal(els['event-plan-details'].hidden,false);
+  // Revision controls are opt-in and show original versus draft H3 before adoption.
+  const preview={id:'revision-v1',status:'ready',base_revision:'recipe-v1',
+    changed_segments:[0],preview:[{index:0,start:0,end:15,
+      before_event:'Original action',after_event:'Revised action',
+      before_h3:'ORIGINAL_H3',after_h3:'REVISED_H3'}]};
+  const awaiting={id:'recipe123',status:'plan_ready',plan_revision:'recipe-v1',
+    plan_preview_setup:'Original setup',segments:[{index:0,start:0,seconds:15,
+      director_plan:{event:'Original action'}}],
+    recipe_advice:{status:'advice_only',issues:[{index:0,reason:'Improve action'}]},
+    recipe_revision:preview};
+  vm.runInContext('renderRecipe('+JSON.stringify(awaiting)+')',context);
+  assert.equal(els['recipe-revise'].hidden,false);
+  assert.equal(els['recipe-accept'].hidden,false);
+  assert.equal(els['recipe-keep'].hidden,false);
+  assert.equal(els['recipe-revision-compare'].hidden,false);
+  assert(els['recipe-revision-text'].textContent.includes('ORIGINAL_H3'));
+  assert(els['recipe-revision-text'].textContent.includes('REVISED_H3'));
+  vm.runInContext('renderRecipe('+JSON.stringify({...awaiting,recipe_revision:{status:'running',base_revision:'recipe-v1'}})+')',context);
+  assert.equal(els['recipe-accept'].hidden,true);
+  assert.equal(els['recipe-revise'].disabled,true);
+  vm.runInContext('renderFurnace('+JSON.stringify({...awaiting,recipe_revision:{status:'running'}})+')',context);
+  assert(els['furnace-detail'].textContent.includes('局部修稿'));
+  vm.runInContext('renderRecipe('+JSON.stringify({...awaiting,recipe_revision:{status:'discarded'}})+')',context);
+  assert.equal(els['recipe-accept'].hidden,true);
+  assert.equal(els['recipe-revision-compare'].hidden,true);
+  
+  // A ready recipe can have a running advisory task: the master reads, not fires.
+  vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'running'}});renderProgress({status:'plan_ready',recipe_advice:{status:'running'}})",context);
+  assert.equal(els.furnace['data-phase'],'review');
+  assert.equal(els.furnace['data-state'],'advising');
+  assert.equal(els['furnace-title'].textContent,'蕉大師正在參詳丹方');
+  assert.equal(els['master-caption'].textContent,'蕉大師參詳丹方');
+  assert.equal(els['current-activity'].hidden,false);
+  assert(els['progress-label'].textContent.includes('原稿保留'));
+  vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'advice_only'}});renderProgress({status:'plan_ready',segments:[]})",context);
+  assert.equal(els.furnace['data-phase'],'ready');
+  assert.equal(els['current-activity'].hidden,true);
+  assert.equal(els['master-caption'].textContent,'蕉大師運功');
+  vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'error'}})",context);
+  assert.equal(els.furnace['data-phase'],'ready');
   console.log('UI checks passed: image mentions with thumbnails, caret insertion, keyboard/IME, fixed slots, saved references, chain limits, prompt review and retakes.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
 
 
 

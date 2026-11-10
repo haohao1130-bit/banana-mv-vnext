@@ -25,7 +25,7 @@ md(f'''# 🍌 Banana MV｜大乘蕉宗公開煉丹房
 '''),
 code('#@title ① 安裝 Banana MV、ComfyUI 與外掛\n'+(ROOT/'tools/public_clone.py').read_text()+f'''
 PROJECT=Path('/content/banana-mv-vnext')
-clone_project(PROJECT,'https://github.com/{REPOSITORY}.git','feature/whole-song-preproduction')
+clone_project(PROJECT,'https://github.com/{REPOSITORY}.git','main')
 sys.path.insert(0,str(PROJECT/'tools'))
 import colab_runtime as runtime
 runtime.install(globals())

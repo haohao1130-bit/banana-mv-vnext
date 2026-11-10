@@ -145,6 +145,7 @@ class ServerIntegration(unittest.TestCase):
                         self.assertEqual(current['status'],'done',current.get('error'))
                         self.assertEqual(current['request']['scene_state_version'],0)
                         self.assertEqual(current['request']['director_schema'],5)
+                        self.assertFalse(current['request']['screenplay_review'])
                         self.assertFalse((app.job_dir(job['id'])/'scene_state.json').exists())
                         self.assertEqual(current['request']['srt_reference'],req['srt_reference'])
                         self.assertEqual(current['request']['srt_cues'][0]['text'],'時間參考歌詞')
@@ -247,4 +248,5 @@ class ServerIntegration(unittest.TestCase):
                         self.assertIn('<Picture 3> 場景',parts[0][1])
             finally:
                 http.shutdown();http.server_close()
+
 

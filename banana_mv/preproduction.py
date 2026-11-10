@@ -157,6 +157,13 @@ def prepare(cfg,job,originals,work,rewrite):
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     ready=folder/'ready.json'
     if ready.is_file():return
+    if job['request'].get('whole_film_version')==1:
+        manifest=json.loads((folder/'whole_film_windows.json').read_text())
+        for seg in job['segments']:
+            if not (folder/f'{seg["index"]:02d}_prompt.txt').is_file():
+                raise ValueError('完整攝影稿切段尚未完成。')
+        atomic_json(ready,manifest)
+        return
     screenplay={'version':5,'shared_setup':job.get('plan_preview_setup',''),
         'clips':[{'index':s['index'],'seconds':s['seconds'],
                   'source_start':s['start'],'source_end':s['start']+s['seconds'],
@@ -227,6 +234,7 @@ def preview(job,work):
             review=json.loads(global_path.read_text(encoding='utf-8'))
             if review.get('status') not in ('passed','disabled'):
                 warnings.append('全局劇本審稿未通過或未完成：'+review.get('status','unknown'))
+            warnings.extend(v for v in review.get('warnings',[]) if v not in warnings)
         except (ValueError,OSError):warnings.append('全局審稿紀錄無法讀取；不可視為通過。')
     for audit_path in folder.glob('*_filming_review.json'):
         try:

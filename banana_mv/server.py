@@ -49,6 +49,9 @@ def write_state(job):
         tmp = p.with_suffix('.tmp')
         tmp.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
         tmp.replace(p)
+        submitted = RUNS/job['id']/'submitted_prompt.txt'
+        if not submitted.exists():
+            submitted.write_text(job.get('request', {}).get('prompt', ''), encoding='utf-8')
 
 
 def job_dir(job_id):
@@ -82,7 +85,14 @@ def preflight(cfg, graph):
 def graph_options(req, seconds, segment=None):
     if req.get("realism_lora"):
         raise ValueError("fal 真人 LoRA 已移除；此舊專案曾啟用 fal，請另建不使用 fal 的專案，避免續跑混用設定。")
-    _, mode = director_prompt(req, seconds, segment)
+    # Rendering needs a mode only. Building the complete prose here would
+    # rerun clip_ending and potentially reintroduce the legacy per-clip finale.
+    if req.get('director_version',1) >= 2:
+        from banana_mv.director import resolve_modes
+        modes=resolve_modes(req,segment)
+        mode=modes[0] if modes else 'performance'
+    else:
+        _,mode=director_prompt(req,seconds,None)
     for field in ('acceleration', 'kitchen_attention', 'sparse_attention', 'motion_lora'):
         if field in req and not isinstance(req[field], bool):
             raise ValueError(field + ' 必須為布林值。')
@@ -323,6 +333,13 @@ def worker(job, cfg, original, song, drive):
     work = job_dir(job['id'])
     inp = Path(cfg['comfy_input_dir'])
     parts, tail = [], None
+    def planning_progress(info):
+        old=job.get('planning_progress',{})
+        now=time.time()
+        same=old.get('stage')==info.get('stage') and old.get('round')==info.get('round')
+        job['planning_progress']=dict(info,started_at=old.get('started_at',now),
+            phase_started_at=old.get('phase_started_at',now) if same else now,updated_at=now)
+        write_state(job)
     def rewrite_progress(info):
         job['rewrite_attempt']=info;write_state(job)
     try:
@@ -364,7 +381,11 @@ def worker(job, cfg, original, song, drive):
             if job['id'] in CANCEL:
                 job['status']='cancelled'; write_state(job); return
             job['status']='planning_story'; write_state(job)
-            plan = ensure_plan(cfg, job['request'], job['segments'], original, work, backend.rewrite_local)
+            if job['request'].get('whole_film_version')==1:
+                planning_progress({'stage':'author','attempt':1})
+                plan=ensure_plan(cfg,job['request'],job['segments'],original,work,backend.rewrite_local,progress=planning_progress)
+            else:
+                plan=ensure_plan(cfg,job['request'],job['segments'],original,work,backend.rewrite_local)
             for index, (seg, row) in enumerate(zip(job['segments'], plan['segments'])):
                 seg['director_plan'] = row
                 if plan['version']==5:
@@ -403,7 +424,8 @@ def worker(job, cfg, original, song, drive):
                 revision=plan_revision(job)
                 job['status']='translating_review';write_state(job)
                 def translation_progress(done,total):
-                    job['translation_progress']={'done':done,'total':total};write_state(job)
+                    job['translation_progress']={'done':done,'total':total}
+                    planning_progress({'stage':'translation','done':done,'total':total})
                 translation_cfg=copy.deepcopy(cfg)
                 translation_cfg['free_after_rewrite']=False
                 try:
@@ -565,6 +587,7 @@ def start(req):
              director_version=2,optimizer_version=1,story_plan=req.get('story_plan', True),
              director_schema=5,h3_validation_version=1,story_scope_version=1,prompt_compiler_version=0,project_scope=req.get('project_scope','full'),
              vnext_preproduction=req.get('rewrite',True),
+             whole_film_version=1 if req.get('rewrite',True) else 0,
              director_authority=bool(req.get('story_plan',True) and req.get('rewrite',True)),
              mv_motion_version=2,
              kitchen_attention=req.get('kitchen_attention',req.get('acceleration',True)),
@@ -572,6 +595,7 @@ def start(req):
     from banana_mv.mv_scope import validate_scope
     validate_scope(req['project_scope'])
     req['rewrite_retries']=rewrite_retry_count(req)
+    req.setdefault('screenplay_review',False)
     req.setdefault('plan_review',False)
     if not isinstance(req['plan_review'],bool):
         raise ValueError('先搓丹方必須為布林值。')
@@ -688,6 +712,106 @@ def plan_revision(job):
                                      (('audio_evidence',) if job['request'].get('music_structure') else ())}
                                      for s in job['segments']]})
 
+
+def request_recipe_advice(job_id, instruction=''):
+    """Explicit read-only model review; keep the ready recipe and its revision."""
+    if not GPU_LOCK.acquire(blocking=False):raise ValueError('已有工作執行中，請稍後請蕉大師看稿。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready':raise ValueError('請先完成丹方，再請蕉大師提供建議。')
+        cfg=copy.deepcopy(backend.load_config())
+        if job.get('recipe_revision',{}).get('status')=='ready':
+            job['recipe_revision']={'status':'discarded','recipe_changed':False,
+                                    'message':'新一輪審稿已開始，上一份候選修訂版不再可採用。'}
+        job['recipe_advice']={'status':'running'};write_state(job)
+        def run():
+            try:
+                from banana_mv.recipe_advice import advise
+                result=advise(job_dir(job_id),cfg,backend.rewrite_local,str(instruction)[:4000])
+            except Exception as exc:
+                result={'status':'error','error':str(exc),'recipe_changed':False}
+            finally:
+                try:
+                    latest=read_state(job_id);latest['recipe_advice']=result;write_state(latest)
+                finally:GPU_LOCK.release()
+        threading.Thread(target=run,daemon=True).start()
+        return job
+    except Exception:
+        GPU_LOCK.release();raise
+
+
+
+def request_recipe_revision(job_id):
+    """Prepare a candidate in the background; official recipe stays untouched."""
+    if not GPU_LOCK.acquire(blocking=False):
+        raise ValueError('其他模型工作正在執行，請稍後產生修訂版。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready' or not job['request'].get('plan_review'):
+            raise ValueError('只有待確認的丹方可以依建議修訂。')
+        advice=job.get('recipe_advice') or {}
+        if advice.get('status')!='advice_only' or not advice.get('issues'):
+            raise ValueError('請先讓蕉大師提供具體修改建議。')
+        revision=plan_revision(job)
+        if job.get('plan_revision')!=revision:
+            raise ValueError('原丹方已變更，請重新開啟專案核對。')
+        cfg=copy.deepcopy(backend.load_config())
+        job['recipe_revision']={'status':'running','base_revision':revision}
+        write_state(job)
+        def run():
+            try:
+                from banana_mv.recipe_revision import draft
+                result=draft(job_dir(job_id),job,cfg,backend.rewrite_local,
+                             advice,revision)
+            except Exception as exc:
+                result={'status':'error','error':str(exc),'recipe_changed':False}
+            finally:
+                try:
+                    latest=read_state(job_id)
+                    if latest.get('recipe_revision',{}).get('base_revision')==revision:
+                        latest['recipe_revision']=result
+                        write_state(latest)
+                finally:
+                    GPU_LOCK.release()
+        threading.Thread(target=run,daemon=True).start()
+        return job
+    except Exception:
+        GPU_LOCK.release()
+        raise
+
+
+def accept_recipe_revision(job_id, revision):
+    """Explicit commit only after stable manuscript & plan-revision checks."""
+    if not GPU_LOCK.acquire(blocking=False):
+        raise ValueError('目前有模型工作執行中，稍後再採用修訂版。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready' or not job['request'].get('plan_review'):
+            raise ValueError('丹方已開爐或不在審閱狀態，不能替換。')
+        from banana_mv.recipe_revision import accept
+        return accept(job_dir(job_id),job,revision,write_state,plan_revision)
+    finally:
+        GPU_LOCK.release()
+
+
+def discard_recipe_revision(job_id, revision):
+    """Keep approved original unchanged; candidate remains archived separately."""
+    if not GPU_LOCK.acquire(blocking=False):
+        raise ValueError('修訂工作尚未完成，無法保留原稿。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready':
+            raise ValueError('目前不是丹方審閱狀態。')
+        state=job.get('recipe_revision') or {}
+        if state.get('status')!='ready' or state.get('id')!=revision:
+            raise ValueError('修訂版已失效。')
+        job['recipe_revision']={'status':'discarded','id':revision,
+                                'recipe_changed':False,
+                                'message':'原丹方與原 H3 咒語保留，修訂版未採用。'}
+        write_state(job)
+        return job
+    finally:
+        GPU_LOCK.release()
 
 def open_furnace(job_id,revision):
     """Approve an existing plan once; reuse its exact allocation without replanning."""
@@ -974,6 +1098,18 @@ class Handler(WebHandler):
                     GPU_LOCK.release()
             if path=='/api/mv/start':
                 return self.send_json(start(self.body_json()))
+            if path=='/api/mv/recipe-advice':
+                body=self.body_json()
+                return self.send_json(request_recipe_advice(body['id'],body.get('instruction','')))
+            if path=='/api/mv/recipe-revise':
+                body=self.body_json()
+                return self.send_json(request_recipe_revision(body['id']))
+            if path=='/api/mv/recipe-accept':
+                body=self.body_json()
+                return self.send_json(accept_recipe_revision(body['id'],body.get('revision')))
+            if path=='/api/mv/recipe-keep':
+                body=self.body_json()
+                return self.send_json(discard_recipe_revision(body['id'],body.get('revision')))
             if path=='/api/mv/open-furnace':
                 body=self.body_json()
                 return self.send_json(open_furnace(body['id'],body.get('revision')))
@@ -1001,6 +1137,12 @@ class Handler(WebHandler):
 
 
 if __name__=='__main__':
+    # Local Windows setup only. Colab keeps its existing guide installation.
+    import os
+    if os.name=='nt':
+        from banana_mv.local_guide import ensure_local_guide
+        guide=ensure_local_guide(backend.load_config())
+        print('Ref2VA guide: '+json.dumps(guide,ensure_ascii=False),flush=True)
     backend.LIBRARY.mkdir(parents=True,exist_ok=True)
     # Selected images are restored by project_inputs(); audio_window() writes
     # the needed audio slice. Do not block startup copying the entire Drive library.
@@ -1012,5 +1154,3 @@ if __name__=='__main__':
             write_state(job)
     print(f'Banana MV on http://127.0.0.1:{backend.PORT}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',backend.PORT),Handler).serve_forever()
-
-

@@ -16,3 +16,15 @@ jobs:
       - run: pip install pillow numpy ipython
       - run: python -m unittest discover -s tests -v
       - run: node tests/check_ui.cjs && node tests/check_asset_reuse.cjs
+      - name: Parse Windows launcher
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'tools/start_local.ps1'), [ref]$tokens, [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | Format-List
+            exit 1
+          }
