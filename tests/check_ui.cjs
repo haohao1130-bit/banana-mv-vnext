@@ -77,7 +77,20 @@ async function submit(){uploads.length=0;await els.form.onsubmit({preventDefault
 
   vm.runInContext("renderProgress({status:'running',segments:[{status:'generating'},{},{},{}]})",context);assert.equal(els.progress.value,0);assert.equal(els.progress.max,4);assert.equal(els['progress-label'].textContent,'整體完成 0／4 段（0%）');assert.equal(els['current-activity'].hidden,false);assert(els['activity-text'].textContent.includes('第 1／4 段 · 影片採樣中'));
   vm.runInContext("renderProgress({status:'running',segments:[{status:'done'},{status:'rewriting'},{},{}]})",context);assert.equal(els.progress.value,1);assert(els['progress-label'].textContent.includes('25%'));assert(els['activity-text'].textContent.includes('9B 當段自動導演'));
-  for(const [status,word] of [['analyzing_audio','分析整首音樂'],['planning_story','規劃全曲事件'],['assembling','合成原曲']]){vm.runInContext(`renderProgress({status:'${status}',segments:[{status:'done'}]})`,context);assert(els['activity-text'].textContent.includes(word));}
+  for(const [status,word] of [['analyzing_audio','分析整首音樂'],['planning_story','全曲故事與攝影稿'],['assembling','合成原曲']]){vm.runInContext(`renderProgress({status:'${status}',segments:[{status:'done'}]})`,context);assert(els['activity-text'].textContent.includes(word));}
+  vm.runInContext("renderProgress({status:'planning_story',planning_progress:{stage:'review',round:2,max_rounds:3,started_at:Date.now()/1000-75},segments:[{},{},{}]})",context);
+  assert(!els['progress-label'].textContent.includes('0%'));assert(els['progress-label'].textContent.includes('1 分'));
+  assert(els['activity-text'].textContent.includes('第 2／3 輪'));assert.equal(els.progress.value,undefined);
+  vm.runInContext("renderFurnace({status:'planning_story',planning_progress:{stage:'author'}})",context);
+  assert.equal(els.furnace['data-phase'],'author');assert(els['furnace-detail'].textContent.includes('眼鏡趕稿'));
+  vm.runInContext("renderFurnace({status:'planning_story',planning_progress:{stage:'repair'}})",context);
+  assert.equal(els.furnace['data-phase'],'repair');
+  vm.runInContext("renderProgress({status:'plan_ready',segments:[{},{}]});renderFurnace({status:'plan_ready'})",context);
+  assert.equal(els.progress.value,1);assert(els['progress-label'].textContent.includes('丹方已備妥'));
+  assert.equal(els.furnace['data-phase'],'ready');assert.equal(els.furnace['data-state'],'paused');
+  vm.runInContext("renderFurnace({status:'running',segments:[{status:'preparing'}]})",context);
+  assert.equal(els.furnace['data-state'],'loading');assert(els['furnace-title'].textContent.includes('投藥'));
+  vm.runInContext("renderFurnace({status:'running',segments:[{status:'generating'}]})",context);assert.equal(els.furnace['data-state'],'working');
   for(const status of ['done','error','cancelled','interrupted']){vm.runInContext(`renderProgress({status:'${status}',segments:[]})`,context);assert.equal(els['current-activity'].hidden,true);assert.equal(els['activity-text'].textContent,'');assert(!els['progress-label'].textContent.includes('NaN'));}
 
   vm.runInContext("renderEventPlan({segments:[{index:0,director_plan:{mode:'story',event:'<b>plain text</b>'}}]})",context);assert.equal(els['event-plan-text'].textContent,'1. story\n<b>plain text</b>');assert.equal(els['event-plan-details'].hidden,false);assert.equal(vm.runInContext("eventPreview('x'.repeat(800)).length",context),101);

@@ -282,7 +282,7 @@ def compile_window(film, seg, *, chain=False, face_identity=False, reference_man
     return text,rows
 
 
-def ensure_film(cfg, req, segments, originals, work, rewrite):
+def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     """One creative call, bounded delivery retries, then deterministic slicing."""
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     duration_ms=round((segments[-1]['start']+segments[-1]['seconds'])*1000)
@@ -335,6 +335,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         if recovery:
             atomic_json(folder/'whole_film_recovery.json',{'input_sha256':fingerprint,'attempts':recovery})
         for attempt in range(0 if film is not None else rewrite_retry_count(req)+1):
+            if progress:progress({'stage':'author','attempt':attempt+1})
             started=time.monotonic()
             raw=rewrite(writer_cfg,system,parts,uuid.uuid4().hex[:8])
             atomic_json(folder/'whole_film_generation.json', {'attempt':attempt+1,
@@ -362,7 +363,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         audit=prior_review
     else:
         before=copy.deepcopy(film)
-        film,audit=review_film(cfg,req,source,film,rewrite,originals,work,parse_film)
+        film,audit=review_film(cfg,req,source,film,rewrite,originals,work,parse_film,progress=progress)
         if film!=before:
             atomic_json(folder/('whole_film_before_review_'+uuid.uuid4().hex[:8]+'.json'),before)
             atomic_json(path,{'version':2 if modern else 1,'input_sha256':fingerprint,'film':film,
@@ -375,6 +376,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         if warning not in audit['warnings']:audit['warnings'].append(warning)
     if warnings and audit['status']=='passed':audit['status']='warnings'
     atomic_json(review_path,audit)
+    if progress:progress({'stage':'compile','done':0,'total':len(segments)})
     # Preserve the complete native shooting prompt before exporting any window.
     # This is an audit artifact, not a long-duration H3 render request.
     if modern:
@@ -391,6 +393,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         text=normalize_mv_prompt(text,len(originals)+int(req.get('mode')=='chain' and seg['index']>0))
         validate_native_mv_format(text,seg['seconds'],require_native=True)
         (folder/f'{seg["index"]:02d}_prompt.txt').write_text(text,encoding='utf-8')
+        if progress:progress({'stage':'compile','done':seg['index']+1,'total':len(segments)})
         from banana_mv.director import MODES
         modes=[r['mode'] for r in local if r['mode'] in MODES]
         mode='action' if 'action' in modes else (modes[0] if modes else 'story')

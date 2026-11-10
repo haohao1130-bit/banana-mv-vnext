@@ -277,11 +277,11 @@ Use acoustic rise/quiet/accent evidence to shape contrast, but do not infer lyri
 Do not output shot lists, mandatory cuts, media tokens, music, new lyrics or analysis commentary. These are planned events, not verified generated events.'''
 
 
-def ensure_plan(cfg, req, segments, originals, work, rewrite):
+def ensure_plan(cfg, req, segments, originals, work, rewrite, progress=None):
     """Plan once, then complete missing content in application-owned clip slots."""
     if req.get("whole_film_version")==1:
         from banana_mv.whole_film import ensure_film
-        return ensure_film(cfg,req,segments,originals,work,rewrite)
+        return ensure_film(cfg,req,segments,originals,work,rewrite,progress=progress)
     if req.get('director_schema')==5:
         from banana_mv.shoot_plan import ensure_shoot_plan
         return ensure_shoot_plan(cfg,req,segments,originals,work,rewrite)

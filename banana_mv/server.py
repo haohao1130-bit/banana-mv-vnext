@@ -326,6 +326,13 @@ def worker(job, cfg, original, song, drive):
     work = job_dir(job['id'])
     inp = Path(cfg['comfy_input_dir'])
     parts, tail = [], None
+    def planning_progress(info):
+        old=job.get('planning_progress',{})
+        now=time.time()
+        same=old.get('stage')==info.get('stage') and old.get('round')==info.get('round')
+        job['planning_progress']=dict(info,started_at=old.get('started_at',now),
+            phase_started_at=old.get('phase_started_at',now) if same else now,updated_at=now)
+        write_state(job)
     def rewrite_progress(info):
         job['rewrite_attempt']=info;write_state(job)
     try:
@@ -367,7 +374,11 @@ def worker(job, cfg, original, song, drive):
             if job['id'] in CANCEL:
                 job['status']='cancelled'; write_state(job); return
             job['status']='planning_story'; write_state(job)
-            plan = ensure_plan(cfg, job['request'], job['segments'], original, work, backend.rewrite_local)
+            if job['request'].get('whole_film_version')==1:
+                planning_progress({'stage':'author','attempt':1})
+                plan=ensure_plan(cfg,job['request'],job['segments'],original,work,backend.rewrite_local,progress=planning_progress)
+            else:
+                plan=ensure_plan(cfg,job['request'],job['segments'],original,work,backend.rewrite_local)
             for index, (seg, row) in enumerate(zip(job['segments'], plan['segments'])):
                 seg['director_plan'] = row
                 if plan['version']==5:
@@ -406,7 +417,8 @@ def worker(job, cfg, original, song, drive):
                 revision=plan_revision(job)
                 job['status']='translating_review';write_state(job)
                 def translation_progress(done,total):
-                    job['translation_progress']={'done':done,'total':total};write_state(job)
+                    job['translation_progress']={'done':done,'total':total}
+                    planning_progress({'stage':'translation','done':done,'total':total})
                 translation_cfg=copy.deepcopy(cfg)
                 translation_cfg['free_after_rewrite']=False
                 try:

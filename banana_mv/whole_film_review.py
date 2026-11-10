@@ -166,7 +166,7 @@ def window_timing_issues(film, source):
     return issues
 
 
-def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
+def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, progress=None):
     """Never reject a usable master merely because review/repair fails."""
     from banana_mv.shoot_plan import _text, _pictures
     from banana_mv.whole_film import photography_system, direction_system, photography_gaps
@@ -195,6 +195,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
     try:
         for round_index in range(maximum+1):
             audit['rounds']=round_index+1
+            if progress:progress({'stage':'review','round':round_index+1,'max_rounds':maximum+1})
             clock=clock_context(current,source)
             issues,formats=reviewed_json(REVIEW_SYSTEM+'\n'+OPTIONAL_TIMING_POLICY,
                 {'source':source,'subject_definitions':current['subject_definitions'],
@@ -252,6 +253,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
                 record={'round':round_index+1,'indices':group,'accepted':False,
                         'scope':'whole_film' if global_repair else 'local'}
                 try:
+                    if progress:progress({'stage':'repair','round':round_index+1,'scope':record['scope'],'indices':group})
                     raw=call((GLOBAL_REPAIR_SYSTEM if global_repair else REPAIR_SYSTEM)+'\n'+OPTIONAL_TIMING_POLICY,{
                         'source':source,'film':current,'clock':clock_context(current,source),'issues':reasons,
                         'editable_range':{'first_index':lo,'last_index':hi,
