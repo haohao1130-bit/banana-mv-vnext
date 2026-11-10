@@ -216,7 +216,7 @@ def accept(work, job, revision, write_state, plan_revision):
     archive.mkdir(exist_ok=True)
     for p,content in backups.items():
         if content is not None:
-            (archive/('preproduction_' if p.parent==folder else 'project_')+p.name).write_bytes(content)
+            (archive/(('preproduction_' if p.parent==folder else 'project_')+p.name)).write_bytes(content)
     previous=copy.deepcopy(job)
     try:
         for p,value in paths.items():
