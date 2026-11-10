@@ -9,7 +9,7 @@ import time
 from banana_mv.scene_state import atomic_json, digest, rewrite_retry_count
 from banana_mv.shoot_plan import (_text, _pictures, adaptation_direction,
     REFERENCE_PERFORMANCE, CLIP_INTENSITY, DYNAMIC_EDITING, AUTO_FILMING, source_role_settings)
-from banana_mv.mv_scope import ending_contract
+from banana_mv.mv_scope import ending_contract, continuous_film_ending_contract
 from banana_mv.lyrics_reference import OPTIONAL_TIMING_POLICY
 
 SYSTEM = '''Write ONE continuous music-video shooting script for the entire supplied song.
@@ -26,6 +26,9 @@ Return JSON only:
  "mode":"performance, band, action, story or another supported director mode",
  "action":"new action starting at this global time",
  "ongoing":"only the motion or present activity that remains underway"}]}
+Respect the source.ending finale contract. Technical render slices never decide
+when the whole-film story ends. The user's explicit final beat or final lyric
+may continue until the actual song end; do not demand a padded final hold.
 The supplied duration_ms is the WHOLE SONG's duration, not a clip length.
 Use GLOBAL integer milliseconds: 1 second = 1000 ms; 12.5 seconds = 12500 ms.
 Budget all events across that complete duration. Do not write a few seconds of
@@ -299,17 +302,21 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     """One creative call, bounded delivery retries, then deterministic slicing."""
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     duration_ms=round((segments[-1]['start']+segments[-1]['seconds'])*1000)
+    path=folder/'whole_film.json'
+    saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
+    # A saved v1/v2 master must keep its original fingerprint and finale rules.
+    # Only fresh v3 masters use the source-duration finale policy.
+    saved_version=saved.get('version',1) if saved is not None else 3
+    modern=saved_version>=2
     source={'brief':req.get('prompt',''),'duration_ms':duration_ms,
             'adaptation':adaptation_direction(req),
             'srt_cues':req.get('srt_cues',[]),'lyrics':req.get('lyrics',''),
             'music_evidence':[{'source_start':s['start'],'source_end':s['start']+s['seconds'],
                                'evidence':s.get('audio_evidence',{})} for s in segments],
-            'ending':ending_contract(req,duration_ms/1000,segments)}
-    path=folder/'whole_film.json'
-    saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
-    # Version 1 saved projects retain their exact fingerprint and output. New
-    # jobs record every creative control so author and repair share one contract.
-    modern=saved is None or saved.get('version',1)>=2
+            'ending':(continuous_film_ending_contract(req,duration_ms/1000)
+                      if saved_version>=3 else ending_contract(req,duration_ms/1000,segments))}
+    if saved_version>=3:
+        source['ending_policy_version']=2
     if modern:
         from banana_mv.core import map_image_mentions
         source.update(photography_contract=2,
@@ -350,8 +357,12 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         for attempt in range(0 if film is not None else rewrite_retry_count(req)+1):
             if progress:progress({'stage':'author','attempt':attempt+1})
             started=time.monotonic()
-            raw=rewrite(writer_cfg,system,parts,uuid.uuid4().hex[:8])
+            request_id=uuid.uuid4().hex[:8]
+            raw=rewrite(writer_cfg,system,parts,request_id)
             atomic_json(folder/'whole_film_generation.json', {'attempt':attempt+1,
+                'rewrite_request_id':request_id,
+                'rewriter_parameters':{k:writer_cfg['rewriter'].get(k) for k in
+                    ('model','thinking','mtp','max_length','temperature','top_p','top_k')},
                 'elapsed_seconds':round(time.monotonic()-started,3),
                 'output_characters':len(raw),'max_generated_tokens':writer_cfg['rewriter']['max_length'],
                 'actual_token_count':None,'note':'TextGenerate returns text; actual token usage is unavailable.'})
@@ -360,7 +371,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             except (ValueError,TypeError) as exc:
                 if attempt==rewrite_retry_count(req):raise
                 parts=[('text',json.dumps(writer_source,ensure_ascii=False)+'\nPrevious delivery was unreadable: '+str(exc)+'. Return the complete continuous timeline JSON.')]+_pictures(originals)
-        atomic_json(path,{'version':2 if modern else 1,'input_sha256':fingerprint,'film':film,
+        atomic_json(path,{'version':saved_version,'input_sha256':fingerprint,'film':film,
                           'quality_status':'not_visually_verified'})
     # Master review sees the whole song BEFORE any deterministic slicing.
     from banana_mv.whole_film_review import review_film
@@ -379,7 +390,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         film,audit=review_film(cfg,req,source,film,rewrite,originals,work,parse_film,progress=progress)
         if film!=before:
             atomic_json(folder/('whole_film_before_review_'+uuid.uuid4().hex[:8]+'.json'),before)
-            atomic_json(path,{'version':2 if modern else 1,'input_sha256':fingerprint,'film':film,
+            atomic_json(path,{'version':saved_version,'input_sha256':fingerprint,'film':film,
                              'quality_status':audit['status']})
     warnings=delivery_warnings(cfg,film,modern)
     if modern:
