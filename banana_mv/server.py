@@ -595,6 +595,7 @@ def start(req):
     from banana_mv.mv_scope import validate_scope
     validate_scope(req['project_scope'])
     req['rewrite_retries']=rewrite_retry_count(req)
+    req.setdefault('screenplay_review',False)
     req.setdefault('plan_review',False)
     if not isinstance(req['plan_review'],bool):
         raise ValueError('先搓丹方必須為布林值。')
@@ -710,6 +711,30 @@ def plan_revision(job):
                                      (('fixed_reference_settings',) if 'fixed_reference_settings' in s else ()) +
                                      (('audio_evidence',) if job['request'].get('music_structure') else ())}
                                      for s in job['segments']]})
+
+
+def request_recipe_advice(job_id, instruction=''):
+    """Explicit read-only model review; keep the ready recipe and its revision."""
+    if not GPU_LOCK.acquire(blocking=False):raise ValueError('已有工作執行中，請稍後請蕉大師看稿。')
+    try:
+        job=read_state(job_id)
+        if job['status']!='plan_ready':raise ValueError('請先完成丹方，再請蕉大師提供建議。')
+        cfg=copy.deepcopy(backend.load_config())
+        job['recipe_advice']={'status':'running'};write_state(job)
+        def run():
+            try:
+                from banana_mv.recipe_advice import advise
+                result=advise(job_dir(job_id),cfg,backend.rewrite_local,str(instruction)[:4000])
+            except Exception as exc:
+                result={'status':'error','error':str(exc),'recipe_changed':False}
+            finally:
+                try:
+                    latest=read_state(job_id);latest['recipe_advice']=result;write_state(latest)
+                finally:GPU_LOCK.release()
+        threading.Thread(target=run,daemon=True).start()
+        return job
+    except Exception:
+        GPU_LOCK.release();raise
 
 
 def open_furnace(job_id,revision):
@@ -997,6 +1022,9 @@ class Handler(WebHandler):
                     GPU_LOCK.release()
             if path=='/api/mv/start':
                 return self.send_json(start(self.body_json()))
+            if path=='/api/mv/recipe-advice':
+                body=self.body_json()
+                return self.send_json(request_recipe_advice(body['id'],body.get('instruction','')))
             if path=='/api/mv/open-furnace':
                 body=self.body_json()
                 return self.send_json(open_furnace(body['id'],body.get('revision')))
@@ -1041,5 +1069,3 @@ if __name__=='__main__':
             write_state(job)
     print(f'Banana MV on http://127.0.0.1:{backend.PORT}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',backend.PORT),Handler).serve_forever()
-
-

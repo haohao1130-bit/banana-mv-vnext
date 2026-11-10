@@ -409,7 +409,7 @@ Never rewrite the film here. Name the minimum chapter(s) for local repair; prese
 The reason must cite original wording and observed events/times, not keyword frequencies.'''
 
 
-COMMISSION_SYSTEM += "\n"+COMMISSION_EVIDENCE_POLICY
+COMMISSION_SYSTEM += "\n"+COMMISSION_EVIDENCE_POLICY+"\n"+OPTIONAL_TIMING_POLICY
 REPAIR_SYSTEM += "\n"+COMMISSION_EVIDENCE_POLICY
 
 
@@ -451,11 +451,17 @@ def ticket_chapter(ticket, chapters):
     at=ticket.get('evidence_at_ms')
     if type(at) not in (int,float):
         reason=str(ticket.get('reason',''))
-        match=re.search(r'shot[_ ]?\d+\s*(?:at\s*|\(\s*)(\d+(?:\.\d+)?)\s*(?:s\b|秒)',reason,re.I)
+        # Units are mandatory: 10000ms is not 10000 seconds. Evidence clock wins
+        # over the model's chapter number, including a plausible but wrong number.
+        units=r'(milliseconds?\b|ms\b|毫秒|seconds?\b|s\b|秒)'
+        match=re.search(r'shot[_ ]?\d+\s*(?:at\s*|\(\s*)(\d+(?:\.\d+)?)\s*'+units,reason,re.I)
+        if not match:
+            match=re.search(r'(\d+(?:\.\d+)?)\s*(milliseconds?\b|ms\b|毫秒)',reason,re.I)
         n=ticket.get('target_chapter')
         if not match and (type(n) is not int or not 0<=n<len(chapters)):
-            match=re.search(r'(\d+(?:\.\d+)?)\s*(?:s\b|秒)',reason)
-        at=float(match[1])*1000 if match else None
+            match=re.search(r'(\d+(?:\.\d+)?)\s*'+units,reason,re.I)
+        at=(float(match[1])*(1 if match[2].lower() in ('ms','millisecond','milliseconds','毫秒') else 1000)
+            if match else None)
     if type(at) in (int,float):
         for i,c in enumerate(chapters):
             if c['start_ms']<=at<c['end_ms']:return i

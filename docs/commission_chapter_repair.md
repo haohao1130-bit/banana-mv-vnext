@@ -47,3 +47,33 @@ Commission review now omits the generated Macro summary while retaining verbatim
 Targeted repairs receive only the named chapter's beat list and clock rows plus existing neighboring context; their output budget is capped at 6144 tokens and their final delivery contract requests only the editable range. The original brief and global constraints remain available to avoid changing the premise. No extra inference call or new semantic rejection was introduced. Full updated-film review still follows the edit.
 
 Regression checks inspect actual assembled inputs with deterministic model responses. Real 9B quality and runtime, including intended replay recognition, remain unverified until a fresh local recipe run. H3 was not rendered.
+
+## 2026-11-10: vocal-reference and user-led manuscript review
+
+Fresh API jobs now set `screenplay_review=false`: the author returns a recipe without
+automatic semantic rejection or edits. Existing saved requests keep their policy.
+At `plan_ready`, **請蕉大師提供建議（不改丹方）** calls a separate read-only review.
+An optional focus is sent alongside the original commission and actual timeline.
+Advice and exact request prompts are stored in `preproduction/advice_*/`; no master,
+compiled prompt, revision or approval changes. Failed/invalid advice is not a QA pass.
+There is no automatic application of suggestions; the user reviews the recipe.
+
+SRT remains optional vocal timing/words. It is not a physical-event list, cut grid,
+speaker/gender detector or automatic finale anchor. Only explicit commission links
+between lyrics and events establish story timing. Voice roles come from user assignments;
+this change does not add audio speaker recognition. Original source audio remains intact.
+
+Fresh masters use v8 and handoff policy v6, preserving v1–v7 saved-master fingerprints.
+Scene snapshots can carry `character_states` and `established_facts`: fallen/standing,
+physical condition, wardrobe/props and achieved results survive without replaying their
+causes. Projection remains structural, without action-keyword censorship or new fatal checks.
+Macro and chapters receive the same vocal policy. Nonfinal chapters may stage a climax
+when explicitly commissioned there, rather than an unconditional ban on climaxes.
+
+Ticket clocks accept ms/milliseconds/毫秒 and seconds, prioritizing explicit evidence
+and shot-associated times over model chapter labels. Generic second ranges do not override
+a valid chapter target; this avoids routing a missing-strand ticket to its opening mention.
+
+Validation is offline unit/HTTP/UI testing with model mocks. No real 9B authoring or H3
+render is claimed. Next acceptance: same 58.5-second source, original CUE and SRT, new
+recipe; inspect actual ending timing, meaningful stage/ring development, and actor states.

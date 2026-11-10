@@ -341,7 +341,9 @@ Choose only those boundaries: normally one requested segment_seconds window
 NEVER invent 3600 ms micro-chapters. These are UPSTREAM AUTHORING CHAPTERS,
 not camera cuts: filming beats still follow events and music freely.
 Allocate EVERY user-specified timed event,
-its cause, consequence and finale; give the last lyric its actual place.
+its cause, consequence and finale. Lyric timing is vocal reference only unless
+the user explicitly links a plot milestone to that lyric; do not schedule one
+event per cue or infer a physical bell/countdown from sung words.
 Keep the user's ending; do not invent a mandatory hero hold. No six-section
 H3 essay, no [Shot N] enumeration, no detailed_description or retention_analysis.
 """
@@ -354,7 +356,12 @@ beats are strictly increasing and less than chapter.end_ms. Every beat includes
 shot_id, state, continuation_state, camera, ongoing_camera, action, ongoing,
 mode, filming_prompt and ongoing_filming_prompt, all as nonempty strings.
 exit_state is a JSON object with scene_states: {scene name: {position, pose,
-physical_condition, wardrobe, props}}. Describe static present conditions only.
+physical_condition, wardrobe, props, character_states: {character id: {position,
+pose, physical_condition, wardrobe, props}}, established_facts: [current result facts]}}.
+Describe present conditions and achieved results, not how they happened.
+For example a character IS down, a bell HAS rung, a contest IS over; retain these
+results when established. Do not erase a result just because its cause is a past action.
+Do not invent result facts or force a contest schema on other stories.
 Do not put punches, impacts, entrances, clothing changes, completed actions or
 future goals in exit_state; those are events in beats. Use a held defensive pose
 at the corner, not a sentence describing a punch landing.
@@ -389,8 +396,8 @@ future events. The final chapter follows the user's actual final cue and song
 duration without an invented fixed hold or premature ending.
 """
 
-SPINE_SYSTEM += "\n"+CONTRACT_POLICY
-CHAPTER_SYSTEM += "\n"+CONTRACT_POLICY
+SPINE_SYSTEM += "\n"+CONTRACT_POLICY+"\n"+OPTIONAL_TIMING_POLICY
+CHAPTER_SYSTEM += "\n"+CONTRACT_POLICY+"\n"+OPTIONAL_TIMING_POLICY
 
 def _chapter_boundaries(segments, duration_ms):
     """Actual requested render-window edges are permissible AUTHORING borders."""
@@ -471,8 +478,12 @@ def _present_exit_state(value):
     The ongoing handoff remains available when legacy output has no typed snapshot.
     """
     if not isinstance(value,dict):return {}
-    fields={'position','location','pose','physical_condition','condition','wardrobe','props'}
+    fields={'position','location','pose','physical_condition','condition','wardrobe','props','established_facts'}
     result={k:v for k,v in value.items() if k in fields}
+    actors=value.get('character_states')
+    if isinstance(actors,dict):
+        result['character_states']={name:_present_exit_state(state) for name,state in actors.items()
+                                    if isinstance(state,dict)}
     scenes=value.get('scene_states')
     if isinstance(scenes,dict):
         result['scene_states']={name:_present_exit_state(state) for name,state in scenes.items()
@@ -638,7 +649,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                  'next_chapter_context':spine['chapters'][index+1]['goal'] if not is_final else None}
         chapter_key=digest({'input_sha256':fingerprint,'chapter':chapter,
                             'previous_exit_state':previous_exit,'previous_last_beat':previous_last,
-                            'chapter_validator_version':5,'event_history_sha256':digest(event_progress(assembled)),'creative_contract':local_source.get('creative_contract')})
+                            'chapter_validator_version':6,'event_history_sha256':digest(event_progress(assembled)),'creative_contract':local_source.get('creative_contract')})
         piece=None
         if checkpoint.is_file():
             try:
@@ -658,7 +669,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                 prompt=dict(payload)
                 if error:prompt['previous_error']=error
                 scope=(f'This chapter ONLY covers {chapter["start_ms"]}ms to '
-                       f'{chapter["end_ms"]}ms. Do NOT write the ending or climax yet. '
+                       f'{chapter["end_ms"]}ms. Do NOT write the ending or climax unless explicitly assigned here by the commission. '
                        'Do NOT use lyrics or events from other chapters.\n'
                        if not is_final else
                        f'This chapter ONLY covers {chapter["start_ms"]}ms to '
@@ -697,7 +708,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
     saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
     # A saved v1/v2 master must keep its original fingerprint and finale rules.
     # Only fresh v3 masters use the source-duration finale policy.
-    saved_version=saved.get('version',1) if saved is not None else 7
+    saved_version=saved.get('version',1) if saved is not None else 8
     modern=saved_version>=2
     source={'brief':req.get('prompt',''),'duration_ms':duration_ms,
             'adaptation':adaptation_direction(req),
@@ -716,7 +727,8 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             render_windows=[{'index':s['index'],'start':s['start'],'seconds':s['seconds']} for s in segments])
     if saved_version>=4:
         source['creative_contract']=creative_contract(req.get('prompt',''))
-    if saved_version>=5:source['chapter_handoff_version']=5 if saved_version>=7 else (4 if saved_version>=6 else 3)
+    if saved_version>=5:source['chapter_handoff_version']=6 if saved_version>=8 else (5 if saved_version>=7 else (4 if saved_version>=6 else 3))
+    if saved_version>=8:source['vocal_reference_policy_version']=2
     fingerprint=digest(source)
     from banana_mv.reference_bindings import reference_manifest, bind_definitions
     references=reference_manifest(req.get('prompt',''),len(originals))

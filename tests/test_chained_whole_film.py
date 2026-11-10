@@ -199,7 +199,7 @@ class ChainedFilmTests(unittest.TestCase):
             self.assertNotIn('Save the FINAL VICTORY',json.dumps(payload))
             self.assertIn('This chapter ONLY covers 0ms to 15000ms',
                           writer.call_args_list[1].args[1])
-            self.assertIn('Do NOT write the ending or climax yet.',
+            self.assertIn('Do NOT write the ending or climax unless explicitly assigned here by the commission.',
                           writer.call_args_list[1].args[1])
             final_payload=json.loads(writer.call_args_list[4].args[2][0][1])
             self.assertEqual([c['text'] for c in final_payload['source']['srt_cues']],
@@ -208,3 +208,4 @@ class ChainedFilmTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
