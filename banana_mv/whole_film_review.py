@@ -30,6 +30,10 @@ untimed list of cuts inside one camera field. Do not impose a shot count,
 minimum cut rate, mandatory singer coverage, literal lyric illustration or genre.
 Read filming_prompt and ongoing_filming_prompt as the actual H3 shooting text
 when present; check them against metadata and source, including scene/vocal roles.
+Shared subject definitions must contain stable identity/scene-role bindings only,
+not plot, opening actions, ending instructions or future outcomes. Each downstream
+window receives this table. Flag leaked shared plot as index -1. Each filming
+paragraph describes only its timed current phase, not past causes or future phases.
 Check present state versus newly performed action and cross-strand continuity.
 Completed events persist as results; similar NEW exchanges, ordinary repeated
 performance, reaction shots and motivated montage are allowed.
@@ -108,27 +112,69 @@ def timed_issues(film, source):
     for i,beat in enumerate(film['beats']):
         start=beat['at_ms']/1000
         end=(film['beats'][i+1]['at_ms'] if i+1<len(film['beats']) else source['duration_ms'])/1000
-        local=[c for c in cues if c['start']<end and c['end']>start]
+        local=[dict(c,clip_start=c['start']-start,clip_end=c['end']-start) for c in cues if c['start']<end and c['end']>start]
         text=' '.join(beat.get(k,'') for k in ('state','action','camera','filming_prompt','ongoing_filming_prompt'))
-        for issue in lyric_conflicts(text,local,all_cues=cues):
+        for issue in lyric_conflicts(text,local,all_cues=cues,at_start=True):
             issues.append({'index':i,'reason':issue['reason']})
+    return issues
+
+
+
+def render_clock(film, source):
+    """Compact exact cut clocks; avoids duplicating every full H3 prompt in QA."""
+    from banana_mv.whole_film import window
+    from banana_mv.lyrics_reference import excerpt
+    result=[]
+    for seg in source.get('render_windows',[]):
+        start=round(seg['start']*1000);end=round((seg['start']+seg['seconds'])*1000)
+        rows=window(film,start,end)
+        result.append({'index':seg['index'],'source_start_seconds':seg['start'],
+            'seconds':seg['seconds'],'local_srt':excerpt(source,seg),
+            'views':[{'local_seconds':r['at_ms']/1000,'shot_id':r['shot_id'],
+                      'global_seconds':(start+r['at_ms'])/1000} for r in rows]})
+    return result
+
+
+def window_timing_issues(film, source):
+    """Check actual sliced prose against local SRT; no model call or coverage quota."""
+    from banana_mv.whole_film import window
+    from banana_mv.lyrics_reference import excerpt
+    from bisect import bisect_right
+    if not source.get('srt_cues'):return []
+    issues=[];times=[b['at_ms'] for b in film['beats']]
+    for seg in source.get('render_windows',[]):
+        start=round(seg['start']*1000);end=round((seg['start']+seg['seconds'])*1000)
+        rows=window(film,start,end)
+        for i,row in enumerate(rows):
+            at=row['at_ms']/1000
+            until=rows[i+1]['at_ms']/1000 if i+1<len(rows) else seg['seconds']
+            # Treat each timed phase as its actual local view, even when shot_id
+            # stays the same. Reconstructing only Shot labels loses such phases.
+            text=row.get('filming_prompt') or row['camera']+' '+row['state']+' '+row['action']
+            local=excerpt(source,seg)
+            cues=[c for c in local if c['clip_start']<until+.75 and c['clip_end']>at-.75]
+            for issue in lyric_conflicts(text,cues,all_cues=source['srt_cues']):
+                idx=bisect_right(times,start+row['at_ms'])-1
+                item={'index':idx,'reason':f"Render window {seg['index']} local {at:g}–{until:g}s: "+issue['reason']}
+                if item not in issues:issues.append(item)
     return issues
 
 
 def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
     """Never reject a usable master merely because review/repair fails."""
     from banana_mv.shoot_plan import _text, _pictures
-    from banana_mv.whole_film import photography_system
+    from banana_mv.whole_film import photography_system, direction_system, photography_gaps
     folder=Path(work)/'preproduction'
     folder.mkdir(exist_ok=True)
     current=copy.deepcopy(film)
-    audit={'version':2,'scope':'whole_film','status':'unchecked','rounds':0,
+    audit={'version':3,'scope':'whole_film','status':'unchecked','rounds':0,
            'checks':[],'issues':[],'repairs':[],'format_attempts':[],'warnings':[]}
     if not req.get('screenplay_review',True):
         audit['status']='disabled'
         audit['warnings'].append('Whole-film semantic review was disabled; this is not a QA pass.')
         audit['output_hash']=content_hash(current)
         return current,audit
+    pending=[]  # Failed edits remain unresolved; a fresh empty review cannot erase them.
     maximum=min(2,max(0,int(req.get('screenplay_repair_rounds',2))))
     def call(system,payload):
         call_cfg=copy.deepcopy(cfg)
@@ -136,7 +182,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
         call_cfg.setdefault('rewriter',{})['max_length']=(max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
             if system.startswith('Repair ') else 4096)
         if system.startswith('Repair '):
-            system+='\n'+photography_system(cfg)
+            system+='\n'+photography_system(cfg)+'\n'+direction_system(source)
         return _text(rewrite(call_cfg,system,[('text',json.dumps(payload,ensure_ascii=False))]+
                              _pictures(originals),uuid.uuid4().hex[:8]))
     try:
@@ -146,17 +192,31 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
             issues,formats=reviewed_json(REVIEW_SYSTEM+'\n'+OPTIONAL_TIMING_POLICY,
                 {'source':source,'subject_definitions':current['subject_definitions'],
                  'clock':{k:v for k,v in clock.items() if k!='timeline'},
-                 'timeline':clock['timeline']},call,folder,f'film_review_{round_index:02d}',
+                 'timeline':clock['timeline'],
+                 'camera_review_enabled':req.get('camera_review',True),
+                 'render_clock':render_clock(current,source)},call,folder,f'film_review_{round_index:02d}',
                 set(range(len(current['beats']))) | {-1},req.get('review_format_retries',2))
             audit['format_attempts'].append(formats)
             exact=timed_issues(current,source)
+            window_issues=window_timing_issues(current,source)
+            for issue in window_issues:
+                if issue not in exact:exact.append(issue)
+            if source.get('photography_contract')==2 and req.get('camera_review',True):
+                for idx in photography_gaps(current):
+                    exact.append({'index':idx,'reason':'The native filming_prompt or ongoing_filming_prompt is missing. Convert this already approved beat into concrete H3 shot prose without changing its story, time, identity or camera intent.'})
             audit['checks'].append({'round':round_index+1,'film_hash':content_hash(current),
-                                    'format_status':formats['status'],'timing_issues':exact})
+                                    'format_status':formats['status'],'timing_issues':exact,
+                                    'window_timing_issues':window_issues})
             if issues is None:
                 audit['status']='review_failed_open';audit['issues']=exact
                 audit['error']=formats.get('error','Invalid review output')
                 audit['warnings'].append('Whole-film review incomplete; the timeline has NOT passed QA.')
                 break
+            for item in pending:
+                from bisect import bisect_right
+                idx=-1 if item['global'] else max(0,bisect_right([b['at_ms'] for b in current['beats']],item['start_ms'])-1)
+                issue={'index':idx,'reason':item['reason']}
+                if issue not in issues:issues.append(issue)
             issues=issues+exact
             audit['issues']=issues
             if not issues:
@@ -195,6 +255,14 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
                     replacement=delivery['beats']
                     if not isinstance(replacement,list) or not replacement or any(not isinstance(b,dict) for b in replacement):
                         raise ValueError('Repair must contain a nonempty beats array.')
+                    # A local repair may redundantly return the entire master.
+                    # Extract only the editable interval, never apply its other edits.
+                    if (not global_repair and lo>0 and replacement[0].get('at_ms')==0):
+                        start=current['beats'][lo]['at_ms']
+                        scoped=[b for b in replacement if type(b.get('at_ms')) is int and start<=b['at_ms']<end]
+                        if scoped:
+                            record['ignored_outside_range']=len(replacement)-len(scoped)
+                            replacement=scoped
                     if replacement[0]['at_ms']!=current['beats'][lo]['at_ms']:
                         raise ValueError('Repair moved the range entry time.')
                     if any(type(b.get('at_ms')) is not int or not current['beats'][lo]['at_ms']<=b['at_ms']<end for b in replacement):
@@ -202,15 +270,22 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
                     candidate=copy.deepcopy(current)
                     candidate['beats'][lo:hi+1]=replacement
                     if 'subject_definitions' in delivery:
-                        # Role changes are allowed only when the reviewer explicitly flags a role conflict.
-                        if not any(re.search(r'role|identity|vocal|subject|角色|身份|演唱|聲部',v['reason'],re.I) for v in reasons):
-                            raise ValueError('Unrequested subject-definition rewrite.')
-                        candidate['subject_definitions']=delivery['subject_definitions']
+                        from banana_mv.whole_film import definition_text
+                        definitions=definition_text(delivery['subject_definitions'])
+                        # Redundant unchanged definitions are harmless in a full-master return.
+                        if definitions!=current['subject_definitions']:
+                            if not any(re.search(r'role|identity|vocal|subject|角色|身份|演唱|聲部',v['reason'],re.I) for v in reasons):
+                                raise ValueError('Unrequested subject-definition rewrite.')
+                            candidate['subject_definitions']=definitions
                     candidate=parse_film(json.dumps(candidate,ensure_ascii=False),source['duration_ms'])
                     record.update(accepted=True,before_hash=content_hash(current),after_hash=content_hash(candidate))
+                    pending=[v for v in pending if not (global_repair or (not v['global'] and current['beats'][lo]['at_ms']<=v['start_ms']<end))]
                     current=candidate
                 except (ValueError,KeyError,TypeError,RuntimeError,OSError) as error:
                     record['error']=str(error)
+                    for reason in reasons:
+                        item={'start_ms':current['beats'][lo]['at_ms'],'global':global_repair,'reason':reason['reason']}
+                        if item not in pending:pending.append(item)
                 audit['repairs'].append(record)
     except (ValueError,KeyError,TypeError,RuntimeError,OSError) as error:
         audit['status']='review_failed_open';audit['error']=str(error)

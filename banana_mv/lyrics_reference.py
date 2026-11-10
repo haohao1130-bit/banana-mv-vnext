@@ -131,7 +131,7 @@ Only repair definite mismatches, preserving valid story, shots and causal states
 Plain untimed lyrics do not establish an exact time. Original audio stays unchanged.'''
 
 
-def lyric_conflicts(text, local_cues, *, shot_clock=False, seconds=None, all_cues=None):
+def lyric_conflicts(text, local_cues, *, shot_clock=False, seconds=None, all_cues=None, at_start=False):
     """Conservative evidence checks, not lyric coverage scoring.
 
     Only explicit tagged/quoted sung text is compared. An untimed line cannot be
@@ -164,6 +164,8 @@ def lyric_conflicts(text, local_cues, *, shot_clock=False, seconds=None, all_cue
             overlapping=[c for c in local_cues if key in norm(c['text']) or norm(c['text']) in key]
             if not overlapping:
                 issues.append({'reason':f'Explicit sung lyric {phrase!r} belongs to another source interval; preserve the scene and remove or retime only this vocal claim.'})
+            elif at_start and not any(c['clip_start']<=start+0.75 and c['clip_end']>start-0.75 for c in overlapping):
+                issues.append({'reason':f'Explicit sung lyric {phrase!r} starts at this view entry but its supplied SRT starts elsewhere; correct only the vocal claim or its onset.'})
             elif shot_clock and not any(c['clip_start']<end+0.75 and c['clip_end']>start-0.75 for c in overlapping):
                 issues.append({'reason':f'Explicit sung lyric {phrase!r} in local shot {start:g}–{end:g}s conflicts with supplied local SRT; preserve coverage and correct its vocal timing.'})
     return issues

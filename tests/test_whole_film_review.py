@@ -86,7 +86,11 @@ class MasterReviewTests(unittest.TestCase):
             root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
             req["screenplay_review"]=True
             from test_whole_film import film
-            writer=Mock(side_effect=[json.dumps(film()),'{"issues":[]}'])
+            master=film()
+            for b in master['beats']:
+                b['filming_prompt']=b['camera']+' '+b['state']+' '+b['action']
+                b['ongoing_filming_prompt']=b['ongoing_camera']+' '+b['continuation_state']+' '+b['ongoing']
+            writer=Mock(side_effect=[json.dumps(master),'{"issues":[]}'])
             ensure_film(cfg,req,timeline(),images,root,writer)
             self.assertEqual(writer.call_count,2)
             self.assertEqual(json.loads((root/'screenplay_review.json').read_text())['status'],'passed')

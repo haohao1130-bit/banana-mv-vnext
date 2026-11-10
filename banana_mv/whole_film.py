@@ -8,7 +8,7 @@ import time
 
 from banana_mv.scene_state import atomic_json, digest, rewrite_retry_count
 from banana_mv.shoot_plan import (_text, _pictures, adaptation_direction,
-    REFERENCE_PERFORMANCE, CLIP_INTENSITY, DYNAMIC_EDITING)
+    REFERENCE_PERFORMANCE, CLIP_INTENSITY, DYNAMIC_EDITING, AUTO_FILMING, source_role_settings)
 from banana_mv.mv_scope import ending_contract
 from banana_mv.lyrics_reference import OPTIONAL_TIMING_POLICY
 
@@ -44,7 +44,10 @@ continuation_state is the current condition for an entry inside the ongoing phas
 never carry an already changed starting pose or prop into that snapshot.
 Each beat supplies a complete relevant snapshot rather than relying on an earlier
 paragraph. When a parallel strand returns, its achieved condition persists.
-subject_definitions contains stable identity/reference and scene/vocal duties;
+subject_definitions contains stable identity/reference and scene/vocal duties ONLY.
+It contains no story recap, event list, opening action, climax, final pose, future
+outcome or instruction to perform the ending. Each rendered window receives this
+shared table, so global plot in that table would leak into every window;
 put mutable clothing, props and changes only in state. Current state overrides
 reference-image initial appearance. Omit absent items unless visibly relevant.
 ongoing describes only what can safely continue if a technical window begins
@@ -105,7 +108,10 @@ use the same labels inside shot prose and keep scene-specific vocal duties.
 State/action fields remain editorial continuity metadata, not the final prompt.
 The ongoing prose preserves established momentum and the current condition;
 it does not replay an impact, entrance, clothing change or completed action.
-Keep future outcomes out of both current and ongoing filming prose.
+Each filming paragraph describes ONLY its timed phase, not the earlier cause or
+a later phase. An impact, fall and settled aftermath each belong at their own
+event times, even if the camera remains in the same shot. Keep completed actions,
+future outcomes and global story explanations out of current and ongoing prose.
 No new lyrics or audio layers. Source song rules and optional SRT policy override
 any sound examples or per-clip word-count suggestions in the official guide.
 Write only the complete JSON; do not append an explanation or a second script.
@@ -118,6 +124,58 @@ def photography_system(cfg):
     guide=Path(guide_path).read_text(encoding='utf-8') if guide_path and Path(guide_path).is_file() else ''
     return ('Official Ref2VA writing guide:\n'+guide+'\n' if guide else '')+PHOTOGRAPHY
 
+
+
+FACE_GUIDANCE = """REFERENCE FACE PRIORITY: For each referenced person, preserve their own
+source face geometry, eyes, nose, lips and jaw through expressions, profiles and
+motion. Do not blend, beautify into a different identity, or reassign a reference.
+This strengthens facial identity, not wardrobe, pose, lighting or composition.
+Current story state governs mutable appearance. It does not force frontal views."""
+
+
+def direction_context(req, image_count):
+    from banana_mv.director import MODES, RECIPES, mode_candidates
+    allowed,excluded=mode_candidates(req)
+    selected=req.get('director','auto')
+    modes=sorted(allowed if selected=='auto' else (allowed | {selected})-excluded)
+    return {'selected_style':selected,'intensity':req.get('intensity','high'),
+            'dynamic_cuts':req.get('dynamic_cuts',True),
+            'face_identity':req.get('face_identity',True),
+            'scene_recipes':{m:RECIPES[m] for m in modes if m in MODES},
+            'excluded_modes':sorted(excluded),
+            'user_role_declarations':source_role_settings(req.get('prompt',''),image_count)}
+
+
+def direction_system(source):
+    from banana_mv.filming_review import SCENE_INSTANCE_POLICY
+    d=source.get('direction',{})
+    text=SCENE_INSTANCE_POLICY+'\n'+AUTO_FILMING+'\n'+REFERENCE_PERFORMANCE
+    text+='\n'+source.get('adaptation','')
+    text+='\n'+CLIP_INTENSITY[d.get('intensity','high')]
+    text+='\n'+(DYNAMIC_EDITING if d.get('dynamic_cuts',True) else
+        'Prefer motivated longer takes; develop blocking and reframing without forcing cuts.')
+    text+='\nUse direction.selected_style as the requested visual emphasis, not permission to change the story. Apply scene_recipes only where that activity occurs; they are possibilities across the film, not a required complete cycle in every shot or window. Respect excluded_modes and original user roles. When a permitted singer appears, prefer waist-up or closer when readable lip sync matters; do not require singer coverage.'
+    if d.get('face_identity',True):text+='\n'+FACE_GUIDANCE
+    return text
+
+
+def photography_gaps(film):
+    return [i for i,b in enumerate(film['beats']) if any(
+        not isinstance(b.get(k),str) or not b[k].strip()
+        for k in ('filming_prompt','ongoing_filming_prompt'))]
+
+
+def delivery_warnings(cfg, film, modern):
+    if not modern:return []
+    warnings=[]
+    if photography_gaps(film):
+        warnings.append('Native photography prose is missing in beats '+
+            ', '.join(map(str,photography_gaps(film)))+
+            '; these beats use legacy outline compilation, NOT a completed photography delivery.')
+    guide=cfg.get('guides',{}).get('ref')
+    if not guide or not Path(guide).is_file():
+        warnings.append('The installed official Ref2VA guide was unavailable; built-in photography guidance was used.')
+    return warnings
 
 
 def definition_text(value):
@@ -170,7 +228,7 @@ def window(film, start_ms, end_ms):
     return result
 
 
-def compile_window(film, seg, *, chain=False):
+def compile_window(film, seg, *, chain=False, face_identity=False):
     start=round(seg['start']*1000);end=round((seg['start']+seg['seconds'])*1000)
     rows=window(film,start,end);lines=[];shot=0;previous=None
     for row in rows:
@@ -181,17 +239,32 @@ def compile_window(film, seg, *, chain=False):
         # New masters already contain the actual native shooting prose. Old saved
         # projects keep their previous compiler without another creative call.
         prose=row.get('filming_prompt') or (row['camera']+' Current visible state: '+row['state']+' New visible action: '+row['action'])
+        if 'filming_prompt' in row:
+            # Present state is the only inherited handoff. No previous event,
+            # whole-song brief, neighboring beat or future outcome is forwarded.
+            prose='Current visible state: '+row['state']+' '+prose
         lines.append(prefix+prose)
         previous=row['shot_id']
-    definitions=film['subject_definitions']
+    # Normalize reference aliases before keyframe insertion shifts their slots.
+    canonical=lambda value:re.sub(r'<\s*(?:Image|Picture)\s*(\d+)\s*>',
+        lambda m:f'<Picture {int(m[1])}>',value,flags=re.I)
+    definitions=canonical(film['subject_definitions'])
+    lines=[canonical(line) for line in lines]
     if chain and seg['index']>0:
         shift=lambda s:re.sub(r'<Picture (\d+)>',lambda m:f'<Picture {int(m[1])+1}>',s)
         definitions='<Picture 1> is the actual preceding last frame, not another actor.\n'+shift(definitions)
         lines=[shift(line) for line in lines]
+    used=list(dict.fromkeys(re.findall(r'<Subject \d+>',' '.join(lines))))
+    visual_retention=[label+': fully_preserved - preserve the assigned reference identity and role; current mutable appearance follows the shot state.' for label in used]
+    if chain and seg['index']>0:
+        visual_retention.insert(0,'<Picture 1> ([Shot 1] first frame): fully_preserved - use the actual preceding last frame as the boundary anchor, not a new actor.')
+    identity=(' '+FACE_GUIDANCE if face_identity else '')
+    task='reference generation + audio reuse'
+    if chain and seg['index']>0:task='keyframe completion + reference generation + audio reuse'
     text='\n\n'.join((
         'subject_definitions:\n'+definitions+'\n<Audio 1> is the supplied source-song window.',
-        'summary:\n[reference generation + audio reuse] Continue this interval of the continuous film. Current visible state governs mutable appearance.',
-        'retention_analysis:\n<Audio 1>: fully_copy - reuse the supplied recording unchanged. Preserve reference identity; current state defines appearance.',
+        'summary:\n['+task+'] Continue this interval of the continuous film. Current visible state governs mutable appearance.',
+        'retention_analysis:\n'+'\n'.join(visual_retention)+('\n' if visual_retention else '')+'<Audio 1>: fully_copy - reuse the supplied recording unchanged. Preserve reference identity; current state defines appearance.'+identity,
         'detailed_description:\n'+'\n'.join(lines),
         'overall_soundscape:\n<Audio 1> unchanged; no generated dialogue or sound layers.',
         'non_diegetic_music:\nThe supplied original song unchanged.'))
@@ -208,18 +281,30 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
             'music_evidence':[{'source_start':s['start'],'source_end':s['start']+s['seconds'],
                                'evidence':s.get('audio_evidence',{})} for s in segments],
             'ending':ending_contract(req,duration_ms/1000,segments)}
-    fingerprint=digest(source);path=folder/'whole_film.json'
+    path=folder/'whole_film.json'
+    saved=json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
+    # Version 1 saved projects retain their exact fingerprint and output. New
+    # jobs record every creative control so author and repair share one contract.
+    modern=saved is None or saved.get('version',1)>=2
+    if modern:
+        from banana_mv.core import map_image_mentions
+        source.update(photography_contract=2,
+            reference_brief=map_image_mentions(req.get('prompt',''),len(originals)),
+            direction=direction_context(req,len(originals)),
+            render_windows=[{'index':s['index'],'start':s['start'],'seconds':s['seconds']} for s in segments])
+    fingerprint=digest(source)
     if path.is_file():
-        saved=json.loads(path.read_text());film=parse_film(json.dumps(saved['film']),duration_ms)
+        film=parse_film(json.dumps(saved['film']),duration_ms)
         if saved['input_sha256']!=fingerprint:raise ValueError('完整攝影稿與目前素材設定不符。')
     else:
         writer_cfg=copy.deepcopy(cfg)
         writer_cfg.setdefault('rewriter',{})['max_length']=max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
-        system=(SYSTEM+'\n'+photography_system(cfg)+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+
-                '\n'+CLIP_INTENSITY[req.get('intensity','high')]+'\n'+
-                (DYNAMIC_EDITING if req.get('dynamic_cuts',True) else 'Use motivated longer continuous takes; preserve requested one-take photography.')+
-                '\n'+OPTIONAL_TIMING_POLICY)
-        parts=[('text',json.dumps(source,ensure_ascii=False))]+_pictures(originals)
+        system=SYSTEM+'\n'+photography_system(cfg)+'\n'+direction_system(source)+'\n'+OPTIONAL_TIMING_POLICY
+        writer_source={k:v for k,v in source.items() if k!='render_windows'}
+        atomic_json(folder/'whole_film_input.json',{'version':2,'input_sha256':fingerprint,
+            'source':writer_source,'render_windows':source.get('render_windows',[])})
+        (folder/'whole_film_commission.txt').write_text(system,encoding='utf-8')
+        parts=[('text',json.dumps(writer_source,ensure_ascii=False))]+_pictures(originals)
         # Saved raw deliveries belong to this immutable job. Recover a complete
         # response before paying for another creative call; never close truncated JSON.
         film=None;recovery=[]
@@ -243,8 +328,8 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
             try:film=parse_film(raw,duration_ms);break
             except (ValueError,TypeError) as exc:
                 if attempt==rewrite_retry_count(req):raise
-                parts=[('text',json.dumps(source,ensure_ascii=False)+'\nPrevious delivery was unreadable: '+str(exc)+'. Return the complete continuous timeline JSON.')]+_pictures(originals)
-        atomic_json(path,{'version':1,'input_sha256':fingerprint,'film':film,
+                parts=[('text',json.dumps(writer_source,ensure_ascii=False)+'\nPrevious delivery was unreadable: '+str(exc)+'. Return the complete continuous timeline JSON.')]+_pictures(originals)
+        atomic_json(path,{'version':2 if modern else 1,'input_sha256':fingerprint,'film':film,
                           'quality_status':'not_visually_verified'})
     # Master review sees the whole song BEFORE any deterministic slicing.
     from banana_mv.whole_film_review import review_film
@@ -254,7 +339,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
     if review_path.is_file():
         try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
         except (ValueError,OSError):pass
-    if (prior_review.get('version')==2 and prior_review.get('scope')=='whole_film'
+    if (prior_review.get('version')==3 and prior_review.get('scope')=='whole_film'
             and prior_review.get('output_hash')==content_hash(film)
             and (prior_review.get('status')!='disabled' or not req.get('screenplay_review',True))):
         audit=prior_review
@@ -263,13 +348,27 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         film,audit=review_film(cfg,req,source,film,rewrite,originals,work,parse_film)
         if film!=before:
             atomic_json(folder/('whole_film_before_review_'+uuid.uuid4().hex[:8]+'.json'),before)
-            atomic_json(path,{'version':1,'input_sha256':fingerprint,'film':film,
+            atomic_json(path,{'version':2 if modern else 1,'input_sha256':fingerprint,'film':film,
                              'quality_status':audit['status']})
-        atomic_json(review_path,audit)
+    warnings=delivery_warnings(cfg,film,modern)
+    for warning in warnings:
+        if warning not in audit['warnings']:audit['warnings'].append(warning)
+    if warnings and audit['status']=='passed':audit['status']='warnings'
+    atomic_json(review_path,audit)
+    # Preserve the complete native shooting prompt before exporting any window.
+    # This is an audit artifact, not a long-duration H3 render request.
+    if modern:
+        full_prompt,_=compile_window(film,{'index':0,'start':0,'seconds':duration_ms/1000},
+                                    face_identity=req.get('face_identity',True))
+        (folder/'whole_film_prompt.txt').write_text(full_prompt,encoding='utf-8')
     rows=[]
     from banana_mv.shoot_plan import validate_native_mv_format
+    from banana_mv.core import normalize_mv_prompt
     for seg in segments:
-        text,local=compile_window(film,seg,chain=req.get('mode')=='chain')
+        text,local=compile_window(film,seg,chain=req.get('mode')=='chain',face_identity=modern and req.get('face_identity',True))
+        old_prompt=folder/f'{seg["index"]:02d}_prompt.txt'
+        if not modern and old_prompt.is_file():text=old_prompt.read_text(encoding='utf-8')
+        text=normalize_mv_prompt(text,len(originals)+int(req.get('mode')=='chain' and seg['index']>0))
         validate_native_mv_format(text,seg['seconds'],require_native=True)
         (folder/f'{seg["index"]:02d}_prompt.txt').write_text(text,encoding='utf-8')
         from banana_mv.director import MODES

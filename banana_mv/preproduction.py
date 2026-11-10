@@ -234,6 +234,7 @@ def preview(job,work):
             review=json.loads(global_path.read_text(encoding='utf-8'))
             if review.get('status') not in ('passed','disabled'):
                 warnings.append('全局劇本審稿未通過或未完成：'+review.get('status','unknown'))
+            warnings.extend(v for v in review.get('warnings',[]) if v not in warnings)
         except (ValueError,OSError):warnings.append('全局審稿紀錄無法讀取；不可視為通過。')
     for audit_path in folder.glob('*_filming_review.json'):
         try:

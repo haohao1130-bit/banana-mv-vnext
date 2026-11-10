@@ -116,7 +116,7 @@ class WholeFilmTests(unittest.TestCase):
     def test_same_shot_crosses_window_without_artificial_cut_or_picture_reset(self):
         text,rows=compile_window(film(),dict(index=1,start=4,seconds=4),chain=True)
         validate_native_mv_format(text,4,require_native=True)
-        self.assertEqual(text.count('[Shot '),1)
+        self.assertEqual(text.split('detailed_description:',1)[1].split('overall_soundscape:',1)[0].count('[Shot '),1)
         self.assertIn('within the same continuous shot',text)
         self.assertIn('<Picture 2>',text)
         self.assertIn('actual preceding last frame',text)
