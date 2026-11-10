@@ -78,6 +78,7 @@ class SourceDurationFinaleTests(unittest.TestCase):
             commission=json.loads((folder/'whole_film_input.json').read_text())
             old_source=dict(commission['source'])
             old_source.pop('ending_policy_version')
+            old_source.pop('reference_manifest',None)
             old_source['ending']=ending_contract(req,9,timeline())
             old_source['render_windows']=commission['render_windows']
             path=folder/'whole_film.json'
