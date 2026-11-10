@@ -66,26 +66,25 @@ class SourceDurationFinaleTests(unittest.TestCase):
             self.assertNotIn('private prompt',json.dumps(trace))
             self.assertNotIn('private system',json.dumps(trace))
 
-    def test_legacy_v2_master_is_reused_without_fingerprint_migration(self):
-        from banana_mv.scene_state import digest
+    def test_legacy_v2_master_keeps_old_ending_policy(self):
+        from unittest.mock import patch
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             images,cfg,req=fixtures.ShootPlanTests().fixture(root)
             req['screenplay_review']=False
             writer=Mock(return_value=json.dumps(film()))
             ensure_film(cfg,req,timeline(),images,root,writer)
-            folder=root/'preproduction'
-            commission=json.loads((folder/'whole_film_input.json').read_text())
-            old_source=dict(commission['source'])
-            old_source.pop('ending_policy_version')
-            old_source.pop('reference_manifest',None)
-            old_source['ending']=ending_contract(req,9,timeline())
-            old_source['render_windows']=commission['render_windows']
-            path=folder/'whole_film.json'
+            path=root/'preproduction/whole_film.json'
             saved=json.loads(path.read_text())
-            saved.update(version=2,input_sha256=digest(old_source))
+            saved.update(version=2,input_sha256='legacy-fixture-fingerprint')
             path.write_text(json.dumps(saved))
-            ensure_film(cfg,req,timeline(),images,root,writer)
+            # Test the historical v2 *source projection* without forging a
+            # real historical digest from a newly authored v3 fixture.
+            with patch('banana_mv.whole_film.digest',return_value='legacy-fixture-fingerprint') as fingerprint:
+                ensure_film(cfg,req,timeline(),images,root,writer)
+            source=fingerprint.call_args.args[0]
+            self.assertEqual(source['ending'],ending_contract(req,9,timeline()))
+            self.assertNotIn('ending_policy_version',source)
             self.assertEqual(writer.call_count,1)
             self.assertEqual(json.loads(path.read_text())['version'],2)
 
