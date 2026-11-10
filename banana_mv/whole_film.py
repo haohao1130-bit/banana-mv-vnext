@@ -125,26 +125,27 @@ Write only the complete JSON; do not append an explanation or a second script.
 """
 
 
+COMPACT_H3_DIRECTOR_GUIDE = """H3 / Ref2VA compact director notes:
+Build one filmable current view per beat: subject positions, motivated camera
+angle and movement, lighting, ordered visible action and reaction. Use source
+<Picture N> to bind referenced <Subject N>; keep scene/vocal duties separate.
+Carry present state forward without replaying entrances, impacts or outcomes.
+Use a shot_id change only for an actual editorial cut. No Shot enumeration,
+six-section essay, retention_analysis, summary or detailed_description JSON.
+Only the compiler writes the native six-section render prompt.
+"""
+
 def photography_system(cfg):
-    # Reuse the same installed guide as the native path; no download or dependency.
+    # Never inject the 24KB human guide into 9B's structured-film author call.
+    # Keep tiny custom guide notes for existing installations and fixtures.
     guide_path=cfg.get('guides',{}).get('ref')
     guide=Path(guide_path).read_text(encoding='utf-8') if guide_path and Path(guide_path).is_file() else ''
-    # The native six-section deliverable belongs to the compiler, not this JSON
-    # transport. Feeding its retention examples here induced thousands of Shot
-    # references in real job 6d6f5c958f15 before any timeline was delivered.
-    if re.search(r'^## 1\.',guide,re.M):
-        chapters=re.split(r'(?=^## \d+\.)',guide,flags=re.M)
-        guide='\n'.join(c for c in chapters if re.match(r'^## (?:2|5)\.',c))
-    transport='''FINAL DELIVERY CONTRACT: Return only a JSON object with subject_definitions
-and beats. Do not generate summary, retention_analysis, detailed_description,
-overall_soundscape or non_diegetic_music fields: the compiler writes those six
-sections afterward. Never enumerate Shot appearances in a shared definition or
-retention list. Place each actual view on the timed beats array; camera prose is
-finished English photography for that phase only, without Shot labels.
+    tiny_note=('\nInstallation note: '+guide) if 0<len(guide)<=256 else ''
+    return COMPACT_H3_DIRECTOR_GUIDE+tiny_note+'\n'+PHOTOGRAPHY+'''
+FINAL DELIVERY CONTRACT: Return ONLY the JSON object with subject_definitions
+and beats. Every timed view belongs in beats. Never enumerate Shot appearances
+inside subject definitions. Do not return a six-section essay.
 '''
-    return ('Official Ref2VA writing guide (reference and shot prose only):\n'+guide+'\n' if guide else '')+PHOTOGRAPHY+'\n'+transport
-
-
 
 FACE_GUIDANCE = """REFERENCE FACE PRIORITY: For each referenced person, preserve their own
 source face geometry, eyes, nose, lips and jaw through expressions, profiles and
@@ -206,11 +207,21 @@ def definition_text(value):
     raise ValueError('全曲攝影稿缺少身份定義；需有非空文字、陣列或物件。')
 
 
-def parse_film(raw, duration_ms):
+def _json_object(raw):
+    """Decode one complete JSON object, with optional markdown fences or preface."""
     text=_text(raw).strip()
-    if text.startswith('```'):text=text.split('\n',1)[1].rsplit('```',1)[0].strip()
-    data=json.loads(text)
+    fenced=re.search(r'^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$',text,re.I)
+    if fenced:text=fenced.group(1).strip()
+    if not text.startswith('{'):
+        offset=text.find('{')
+        if offset<0:raise ValueError('模型未交付 JSON 物件。')
+        text=text[offset:]
+    data,_=json.JSONDecoder().raw_decode(text)
     if not isinstance(data,dict):raise ValueError('全曲攝影稿需為 JSON 物件。')
+    return data
+
+def parse_film(raw, duration_ms):
+    data=_json_object(raw)
     data['subject_definitions']=definition_text(data.get('subject_definitions'))
     beats=data.get('beats')
     if not isinstance(beats,list) or not beats:raise ValueError('全曲攝影稿缺少時間軸。')
@@ -298,8 +309,185 @@ def compile_window(film, seg, *, chain=False, face_identity=False, reference_man
     return text,rows
 
 
+
+SPINE_SYSTEM = """Plan one COMPLETE music video before filming prompts are expanded.
+You have the whole source duration, the user's brief and reference image roles.
+Return ONLY JSON with: subject_definitions (stable identities and scene/vocal
+duties, no story spoilers) and chapters (ordered, contiguous macro chapters).
+Every chapter needs integer start_ms, end_ms, goal, entry, exit_target.
+First start_ms is 0, last end_ms equals duration_ms. Choose chapter boundaries
+from story events and manageable writing length, typically 8-18 seconds, NOT
+from 10/15-second H3 render cuts. Allocate EVERY user-specified timed event,
+its cause, consequence and finale; give the last lyric its actual place.
+Keep the user's ending; do not invent a mandatory hero hold. No six-section
+H3 essay, no [Shot N] enumeration, no detailed_description or retention_analysis.
+"""
+
+CHAPTER_SYSTEM = """Expand ONE chapter of an already locked whole-song macro spine.
+Return ONLY JSON with beats (GLOBAL at_ms) and exit_state (complete state at
+this chapter's end). First beat at_ms MUST equal chapter.start_ms; all later
+beats are strictly increasing and less than chapter.end_ms. Every beat includes
+shot_id, state, continuation_state, camera, ongoing_camera, action, ongoing,
+mode, filming_prompt and ongoing_filming_prompt, all as nonempty strings.
+Each beat is ONE view; only a real camera cut changes shot_id. Write detailed
+native H3 filming prose in the two filming_prompt fields, not a Shot list.
+The opening state inherits previous_exit_state; do not reset action, wardrobe,
+position, injury, props, or scene roles. Continue the preceding shot_id if the
+same shot continues. Never replay an already completed impact or entrance.
+A beat's at_ms is whole-song time, not seconds local to this chapter.
+Only events assigned to this chapter occur here. Later chapter goals remain
+future events. The final chapter follows the user's actual final cue and song
+duration without an invented fixed hold or premature ending.
+"""
+
+def _validated_spine(data, duration_ms):
+    definitions=definition_text(data.get('subject_definitions'))
+    chapters=data.get('chapters')
+    if not isinstance(chapters,list) or len(chapters)<2 or len(chapters)>max(2,min(32,duration_ms//4000+1)):
+        raise ValueError('全曲骨架需為合理數量的連續創作章節。')
+    at=0
+    for chapter in chapters:
+        if not isinstance(chapter,dict) or type(chapter.get('start_ms')) is not int or type(chapter.get('end_ms')) is not int:
+            raise ValueError('創作章節需包含整數全局時間。')
+        if chapter['start_ms']!=at or not at<chapter['end_ms']<=duration_ms:
+            raise ValueError('全曲骨架時間重疊或缺段。')
+        for key in ('goal','entry','exit_target'):
+            if not isinstance(chapter.get(key),str) or not chapter[key].strip():
+                raise ValueError('創作章節缺少事件或接力目標：'+key)
+        at=chapter['end_ms']
+    if at!=duration_ms:raise ValueError('全曲骨架未涵蓋歌曲尾端。')
+    return {'subject_definitions':definitions,'chapters':chapters}
+
+def _validated_chapter(data, spine, chapter):
+    beats=data.get('beats')
+    if not isinstance(beats,list) or not beats:
+        raise ValueError('本章缺少 beats。')
+    start,end=chapter['start_ms'],chapter['end_ms']
+    if type(beats[0].get('at_ms')) is not int or beats[0]['at_ms']!=start:
+        raise ValueError('本章第一鏡必須從章節起點開始。')
+    relative=[]
+    for beat in beats:
+        if not isinstance(beat,dict) or type(beat.get('at_ms')) is not int or not start<=beat['at_ms']<end:
+            raise ValueError('本章鏡頭超出章節時間。')
+        for key in ('filming_prompt','ongoing_filming_prompt'):
+            if not isinstance(beat.get(key),str) or not beat[key].strip():
+                raise ValueError('本章缺少完整 H3 拍攝描述：'+key)
+        relative.append(dict(beat,at_ms=beat['at_ms']-start))
+    parse_film(json.dumps({'subject_definitions':spine['subject_definitions'],
+                           'beats':relative},ensure_ascii=False),end-start)
+    exit_state=data.get('exit_state')
+    if not isinstance(exit_state,(str,list,dict)) or not exit_state:
+        raise ValueError('本章沒有完整結尾狀態，無法交棒。')
+    return {'beats':beats,'exit_state':exit_state}
+
+def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
+                    fingerprint, duration_ms, rewrite, progress):
+    """Two-level author: one macro spine, incremental chapter calls and checkpoints."""
+    retries=rewrite_retry_count(req)
+    spine_path=folder/'whole_film_spine.json'
+    def ask(system, payload, token_cap, label):
+        attempt_cfg=copy.deepcopy(writer_cfg)
+        attempt_cfg['rewriter']['max_length']=token_cap
+        error=''
+        for attempt in range(retries+1):
+            if progress:progress({'stage':'author','substage':label,'attempt':attempt+1})
+            started=time.monotonic()
+            request_id=uuid.uuid4().hex[:8]
+            text_payload=json.dumps(payload,ensure_ascii=False)
+            if error:text_payload+='\nPREVIOUS INVALID OUTPUT: '+error+'\nReturn a fresh complete JSON object.'
+            raw=rewrite(attempt_cfg,system,[('text',text_payload)]+_pictures(originals),request_id)
+            (folder/f'whole_film_{label}_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
+            try:
+                result=_json_object(raw)
+                return result,request_id,round(time.monotonic()-started,3)
+            except (ValueError,TypeError) as exc:
+                error=str(exc)
+                if attempt==retries:raise
+        raise ValueError('模型未能交付可解析的章節 JSON。')
+    spine=None
+    if spine_path.is_file():
+        try:
+            cached=json.loads(spine_path.read_text(encoding='utf-8'))
+            if cached.get('input_sha256')==fingerprint:
+                spine=_validated_spine(cached['spine'],duration_ms)
+        except (ValueError,TypeError,KeyError,OSError):
+            spine=None
+    if spine is None:
+        # Macro inference is deliberately smaller than a full-camera-script call.
+        macro_cfg=copy.deepcopy(writer_cfg)
+        macro_cfg['rewriter']['max_length']=min(3072,max(2048,int(cfg.get('rewriter',{}).get('max_length',8192))))
+        error=''
+        for attempt in range(retries+1):
+            if progress:progress({'stage':'author','substage':'spine','attempt':attempt+1})
+            request_id=uuid.uuid4().hex[:8]
+            prompt=json.dumps(writer_source,ensure_ascii=False)
+            if error:prompt+='\nPREVIOUS INVALID SPINE: '+error
+            raw=rewrite(macro_cfg,SPINE_SYSTEM,[('text',prompt)]+_pictures(originals),request_id)
+            (folder/f'whole_film_spine_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
+            try:
+                data=_json_object(raw)
+                if 'beats' in data:
+                    # Compatibility: an existing model/fixture may deliver a
+                    # valid full script directly; do not pay for another call.
+                    return parse_film(raw,duration_ms)
+                spine=_validated_spine(data,duration_ms)
+                atomic_json(spine_path,{'input_sha256':fingerprint,'spine':spine})
+                break
+            except (ValueError,TypeError,KeyError) as exc:
+                error=str(exc)
+                if attempt==retries:raise
+    assembled=[];previous_exit=None;previous_last=None;receipts=[]
+    for index,chapter in enumerate(spine['chapters']):
+        checkpoint=folder/f'whole_film_chapter_{index:02d}.json'
+        payload={'source':writer_source,'spine':spine,'chapter_index':index,
+                 'chapter':chapter,'previous_exit_state':previous_exit,
+                 'previous_last_beat':previous_last,'song_duration_ms':duration_ms}
+        chapter_key=digest({'input_sha256':fingerprint,'chapter':chapter,
+                            'previous_exit_state':previous_exit,'previous_last_beat':previous_last})
+        piece=None
+        if checkpoint.is_file():
+            try:
+                saved=json.loads(checkpoint.read_text(encoding='utf-8'))
+                if saved.get('chapter_key')==chapter_key:
+                    piece=_validated_chapter(saved['piece'],spine,chapter)
+            except (ValueError,TypeError,KeyError,OSError):
+                piece=None
+        if piece is None:
+            error=''
+            stage_cfg=copy.deepcopy(writer_cfg)
+            stage_cfg['rewriter']['max_length']=min(6144,max(3072,int(cfg.get('rewriter',{}).get('max_length',8192))))
+            for attempt in range(retries+1):
+                if progress:progress({'stage':'author','substage':'chapter','done':index,
+                                       'total':len(spine['chapters']),'attempt':attempt+1})
+                started=time.monotonic();request_id=uuid.uuid4().hex[:8]
+                prompt=dict(payload)
+                if error:prompt['previous_error']=error
+                raw=rewrite(stage_cfg,CHAPTER_SYSTEM+'\n'+COMPACT_H3_DIRECTOR_GUIDE,
+                            [('text',json.dumps(prompt,ensure_ascii=False))]+_pictures(originals),request_id)
+                (folder/f'whole_film_chapter_{index:02d}_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
+                try:
+                    piece=_validated_chapter(_json_object(raw),spine,chapter)
+                    receipts.append({'chapter':index,'request_id':request_id,
+                                     'elapsed_seconds':round(time.monotonic()-started,3)})
+                    atomic_json(checkpoint,{'chapter_key':chapter_key,'piece':piece})
+                    break
+                except (ValueError,TypeError,KeyError) as exc:
+                    error=str(exc)
+                    if attempt==retries:raise
+        assembled.extend(piece['beats'])
+        previous_exit=piece['exit_state']
+        previous_last=piece['beats'][-1]
+        if progress:progress({'stage':'author','substage':'chapter','done':index+1,
+                               'total':len(spine['chapters'])})
+    film=parse_film(json.dumps({'subject_definitions':spine['subject_definitions'],
+                                'beats':assembled},ensure_ascii=False),duration_ms)
+    atomic_json(folder/'whole_film_generation.json',
+                {'mode':'chained','chapter_count':len(spine['chapters']),
+                 'calls':receipts,'input_sha256':fingerprint})
+    return film
+
 def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
-    """One creative call, bounded delivery retries, then deterministic slicing."""
+    """One upstream whole-film authoring job, with chained chapters for long songs."""
     folder=Path(work)/'preproduction';folder.mkdir(exist_ok=True)
     duration_ms=round((segments[-1]['start']+segments[-1]['seconds'])*1000)
     path=folder/'whole_film.json'
@@ -354,6 +542,10 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
                 recovery.append({'raw_file':candidate.name,'accepted':False,'error':str(exc)})
         if recovery:
             atomic_json(folder/'whole_film_recovery.json',{'input_sha256':fingerprint,'attempts':recovery})
+        if (film is None and duration_ms>30000 and
+                req.get('authoring_mode',cfg.get('rewriter',{}).get('whole_film_mode','chained'))=='chained'):
+            film=_chained_author(cfg,req,writer_cfg,writer_source,originals,folder,
+                                 fingerprint,duration_ms,rewrite,progress)
         for attempt in range(0 if film is not None else rewrite_retry_count(req)+1):
             if progress:progress({'stage':'author','attempt':attempt+1})
             started=time.monotonic()
