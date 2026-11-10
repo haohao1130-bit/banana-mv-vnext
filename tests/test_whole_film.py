@@ -31,6 +31,35 @@ def film():
 
 
 class WholeFilmTests(unittest.TestCase):
+    def test_native_shooting_prose_survives_slicing_without_outline_copy(self):
+        master=film()
+        master['beats'][0].update(
+            filming_prompt='<Subject 1> fills a waist-up frame from table height. A short lateral track follows the hand placing the cup; warm backlight outlines the fingers.',
+            ongoing_filming_prompt='In the established table-height close view, <Subject 1> watches the resting cup; the lateral move settles without another placement.')
+        prompt,_=compile_window(master,dict(index=0,start=0,seconds=2))
+        self.assertIn(master['beats'][0]['filming_prompt'],prompt)
+        self.assertNotIn('EARLY_CAUSE',prompt)
+        self.assertNotIn('New visible action:',prompt)
+        continued,_=compile_window(master,dict(index=1,start=2,seconds=1),chain=True)
+        self.assertIn('without another placement',continued)
+        self.assertNotIn('hand placing the cup',continued)
+        self.assertNotIn('CONTACT',continued)
+        validate_native_mv_format(continued,1,require_native=True)
+
+    def test_author_receives_installed_native_guide_and_photography_commission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['screenplay_review']=False
+            guide=root/'native-guide.md';guide.write_text('OFFICIAL_GUIDE_SENTINEL')
+            cfg['guides']={'ref':str(guide)}
+            writer=Mock(return_value=json.dumps(film()))
+            ensure_film(cfg,req,timeline(),images,root,writer)
+            system=writer.call_args.args[1]
+            self.assertIn('OFFICIAL_GUIDE_SENTINEL',system)
+            self.assertIn('filming_prompt',system)
+            self.assertIn('ongoing_filming_prompt',system)
+            self.assertEqual(writer.call_count,1)
+
     def test_subject_tables_are_not_misreported_as_missing(self):
         for definitions in ([{'id':'S1','name':'Lead','appearance':'current source identity'}],
                             {'<Subject 7>':{'source':'<Picture 2>','role':'silent opponent'}},

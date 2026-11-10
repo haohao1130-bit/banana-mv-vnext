@@ -19,6 +19,8 @@ Return JSON only:
 {"subject_definitions":"stable Subject/Picture identity, scene and vocal bindings",
  "beats":[{"at_ms":0,"shot_id":"s1","state":"complete current visible state",
  "camera":"concrete framing and camera movement",
+ "filming_prompt":"finished native H3 shot prose: composition, action and photography",
+ "ongoing_filming_prompt":"finished native shot prose for the already underway phase",
  "ongoing_camera":"the already underway camera view, without restarting its move",
  "continuation_state":"present state during the ongoing phase, without resetting its starting pose",
  "mode":"performance, band, action, story or another supported director mode",
@@ -79,6 +81,44 @@ the user's input language.
 '''
 
 
+PHOTOGRAPHY = """You enhance reference-conditioned video prompts (Ref2VA), not synopsis prose.
+Apply the supplied official guide's reference labels and shot-writing language.
+The transport is the timeline JSON schema above, NOT six headers in the JSON.
+The compiler emits the six sections after slicing; author their detailed_description
+NOW, for the whole film, before any slicing. In EVERY beat additionally return:
+"filming_prompt": finished English shot prose, without a Shot label or timestamp;
+"ongoing_filming_prompt": finished prose for entering the already underway phase.
+Compose each as a filmable current view: establish the scene, visible subjects and
+screen positions, framing and camera height/angle, relevant foreground/depth and
+lighting, concrete ordered action/reaction, and motivated camera path, speed and
+extent (or a deliberate locked-off view). Describe what the camera actually sees.
+Use meaningful close-ups, spatially readable coverage, expressive performance,
+focus or speed changes and motivated montage when they serve the user's event.
+Choose techniques freely; this is not a checklist of effects for every shot.
+A phrase like 'dynamic camera', 'cinematic montage' or 'orbit the lead' is not a
+completed shooting description. Expand HOW the event is filmed rather than
+copying state/action summaries. One beat is one current view; give each actual
+cut its own global time and shot_id. Separate parallel locations into real shots;
+shared identity never puts different scene instances in one physical composition.
+Bind <Subject N> to supplied <Picture N> in natural English definition lines;
+use the same labels inside shot prose and keep scene-specific vocal duties.
+State/action fields remain editorial continuity metadata, not the final prompt.
+The ongoing prose preserves established momentum and the current condition;
+it does not replay an impact, entrance, clothing change or completed action.
+Keep future outcomes out of both current and ongoing filming prose.
+No new lyrics or audio layers. Source song rules and optional SRT policy override
+any sound examples or per-clip word-count suggestions in the official guide.
+Write only the complete JSON; do not append an explanation or a second script.
+"""
+
+
+def photography_system(cfg):
+    # Reuse the same installed guide as the native path; no download or dependency.
+    guide_path=cfg.get('guides',{}).get('ref')
+    guide=Path(guide_path).read_text(encoding='utf-8') if guide_path and Path(guide_path).is_file() else ''
+    return ('Official Ref2VA writing guide:\n'+guide+'\n' if guide else '')+PHOTOGRAPHY
+
+
 
 def definition_text(value):
     """Render structured identity tables without dropping fields or guessing slots."""
@@ -121,6 +161,9 @@ def window(film, start_ms, end_ms):
         if beat['at_ms']<start_ms:
             row['state']=beat['continuation_state']
             row['camera']=beat['ongoing_camera']
+        prose_key='ongoing_filming_prompt' if beat['at_ms']<start_ms else 'filming_prompt'
+        if isinstance(beat.get(prose_key),str) and beat[prose_key].strip():
+            row['filming_prompt']=beat[prose_key]
         row['mode']=beat.get('mode','story')
         row['action']=beat['action'] if beat['at_ms']>=start_ms else beat['ongoing']
         result.append(row)
@@ -135,7 +178,10 @@ def compile_window(film, seg, *, chain=False):
         if row['shot_id']!=previous:
             shot+=1;prefix=f'[Shot {shot}] '+(f'At {clock}, ' if shot>1 else '')
         else:prefix=f'At local {clock}, within the same continuous shot, '
-        lines.append(prefix+row['camera']+' Current visible state: '+row['state']+' New visible action: '+row['action'])
+        # New masters already contain the actual native shooting prose. Old saved
+        # projects keep their previous compiler without another creative call.
+        prose=row.get('filming_prompt') or (row['camera']+' Current visible state: '+row['state']+' New visible action: '+row['action'])
+        lines.append(prefix+prose)
         previous=row['shot_id']
     definitions=film['subject_definitions']
     if chain and seg['index']>0:
@@ -169,7 +215,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
     else:
         writer_cfg=copy.deepcopy(cfg)
         writer_cfg.setdefault('rewriter',{})['max_length']=max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
-        system=(SYSTEM+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+
+        system=(SYSTEM+'\n'+photography_system(cfg)+'\n'+adaptation_direction(req)+'\n'+REFERENCE_PERFORMANCE+
                 '\n'+CLIP_INTENSITY[req.get('intensity','high')]+'\n'+
                 (DYNAMIC_EDITING if req.get('dynamic_cuts',True) else 'Use motivated longer continuous takes; preserve requested one-take photography.')+
                 '\n'+OPTIONAL_TIMING_POLICY)

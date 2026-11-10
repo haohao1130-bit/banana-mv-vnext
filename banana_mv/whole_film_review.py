@@ -28,6 +28,8 @@ that were summarized instead of staged. A camera beat is one concrete view;
 actual stage/ring or viewpoint cuts need their own timeline entries, not an
 untimed list of cuts inside one camera field. Do not impose a shot count,
 minimum cut rate, mandatory singer coverage, literal lyric illustration or genre.
+Read filming_prompt and ongoing_filming_prompt as the actual H3 shooting text
+when present; check them against metadata and source, including scene/vocal roles.
 Check present state versus newly performed action and cross-strand continuity.
 Completed events persist as results; similar NEW exchanges, ordinary repeated
 performance, reaction shots and motivated montage are allowed.
@@ -45,7 +47,9 @@ Do not repair in this step.'''
 REPAIR_SYSTEM = '''Repair ONLY the assigned contiguous beat range of a continuous film.
 Return JSON only: {"beats":[replacement timeline entries]}.
 Use exactly the existing beat schema: at_ms, shot_id, state, continuation_state,
-camera, ongoing_camera, mode, action, ongoing. Global integer milliseconds.
+camera, ongoing_camera, mode, action, ongoing. Also preserve and update
+filming_prompt and ongoing_filming_prompt when present: these are the actual
+shooting descriptions, and must agree with the repaired metadata. Global integer milliseconds.
 You may add/remove beats and retime events INSIDE the editable range. Preserve
 its start time and never reach its exclusive end. Preserve all unedited beats,
 the original brief, scene-specific roles, mandatory events and causal continuity.
@@ -105,7 +109,7 @@ def timed_issues(film, source):
         start=beat['at_ms']/1000
         end=(film['beats'][i+1]['at_ms'] if i+1<len(film['beats']) else source['duration_ms'])/1000
         local=[c for c in cues if c['start']<end and c['end']>start]
-        text=' '.join(beat[k] for k in ('state','action','camera'))
+        text=' '.join(beat.get(k,'') for k in ('state','action','camera','filming_prompt','ongoing_filming_prompt'))
         for issue in lyric_conflicts(text,local,all_cues=cues):
             issues.append({'index':i,'reason':issue['reason']})
     return issues
@@ -114,6 +118,7 @@ def timed_issues(film, source):
 def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
     """Never reject a usable master merely because review/repair fails."""
     from banana_mv.shoot_plan import _text, _pictures
+    from banana_mv.whole_film import photography_system
     folder=Path(work)/'preproduction'
     folder.mkdir(exist_ok=True)
     current=copy.deepcopy(film)
@@ -130,6 +135,8 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
         # Reviews return compact issues; full repairs retain the author's output budget.
         call_cfg.setdefault('rewriter',{})['max_length']=(max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
             if system.startswith('Repair ') else 4096)
+        if system.startswith('Repair '):
+            system+='\n'+photography_system(cfg)
         return _text(rewrite(call_cfg,system,[('text',json.dumps(payload,ensure_ascii=False))]+
                              _pictures(originals),uuid.uuid4().hex[:8]))
     try:
