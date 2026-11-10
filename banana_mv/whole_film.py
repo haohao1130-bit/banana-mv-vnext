@@ -147,7 +147,7 @@ def photography_system(cfg):
         guide='\n'.join(c for c in chapters if re.match(r'^## (?:2|5)\.',c))
     tiny_note=('\nInstallation note: '+guide) if 0<len(guide)<=1024 else ''
     return COMPACT_H3_DIRECTOR_GUIDE+tiny_note+'\n'+PHOTOGRAPHY+'''
-FINAL DELIVERY CONTRACT: Return ONLY the JSON object with subject_definitions
+FINAL DELIVERY CONTRACT: Return only a JSON object with subject_definitions
 and beats. Every timed view belongs in beats. Never enumerate Shot appearances
 inside subject definitions. Do not return a six-section essay.
 '''
