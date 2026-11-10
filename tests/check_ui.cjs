@@ -219,6 +219,32 @@ async function submit(){uploads.length=0;await els.form.onsubmit({preventDefault
   assert.equal(els['event-plan-details'].hidden,true);
   vm.runInContext("renderEventPlan({status:'done',segments:[{index:0,director_plan:{mode:'story',event:'one copy'}}]})",context);
   assert.equal(els['event-plan-details'].hidden,false);
+  // Revision controls are opt-in and show original versus draft H3 before adoption.
+  const preview={id:'revision-v1',status:'ready',base_revision:'recipe-v1',
+    changed_segments:[0],preview:[{index:0,start:0,end:15,
+      before_event:'Original action',after_event:'Revised action',
+      before_h3:'ORIGINAL_H3',after_h3:'REVISED_H3'}]};
+  const awaiting={id:'recipe123',status:'plan_ready',plan_revision:'recipe-v1',
+    plan_preview_setup:'Original setup',segments:[{index:0,start:0,seconds:15,
+      director_plan:{event:'Original action'}}],
+    recipe_advice:{status:'advice_only',issues:[{index:0,reason:'Improve action'}]},
+    recipe_revision:preview};
+  vm.runInContext('renderRecipe('+JSON.stringify(awaiting)+')',context);
+  assert.equal(els['recipe-revise'].hidden,false);
+  assert.equal(els['recipe-accept'].hidden,false);
+  assert.equal(els['recipe-keep'].hidden,false);
+  assert.equal(els['recipe-revision-compare'].hidden,false);
+  assert(els['recipe-revision-text'].textContent.includes('ORIGINAL_H3'));
+  assert(els['recipe-revision-text'].textContent.includes('REVISED_H3'));
+  vm.runInContext('renderRecipe('+JSON.stringify({...awaiting,recipe_revision:{status:'running',base_revision:'recipe-v1'}})+')',context);
+  assert.equal(els['recipe-accept'].hidden,true);
+  assert.equal(els['recipe-revise'].disabled,true);
+  vm.runInContext('renderFurnace('+JSON.stringify({...awaiting,recipe_revision:{status:'running'}})+')',context);
+  assert(els['furnace-detail'].textContent.includes('局部修稿'));
+  vm.runInContext('renderRecipe('+JSON.stringify({...awaiting,recipe_revision:{status:'discarded'}})+')',context);
+  assert.equal(els['recipe-accept'].hidden,true);
+  assert.equal(els['recipe-revision-compare'].hidden,true);
+  
   // A ready recipe can have a running advisory task: the master reads, not fires.
   vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'running'}});renderProgress({status:'plan_ready',recipe_advice:{status:'running'}})",context);
   assert.equal(els.furnace['data-phase'],'review');
