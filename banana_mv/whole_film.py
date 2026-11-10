@@ -103,7 +103,11 @@ completed shooting description. Expand HOW the event is filmed rather than
 copying state/action summaries. One beat is one current view; give each actual
 cut its own global time and shot_id. Separate parallel locations into real shots;
 shared identity never puts different scene instances in one physical composition.
-Bind <Subject N> to supplied <Picture N> in natural English definition lines;
+Use the supplied reference_manifest to retain explicit source identities and
+locations. Give referenced Subjects their source Picture labels; shared identity
+in different scene instances may use the same Picture. Never infer a Picture
+number from a Subject or speaker number. Keep original supporting cast unbound
+when it has no reference. Bind <Subject N> to supplied <Picture N> in natural English definition lines;
 use the same labels inside shot prose and keep scene-specific vocal duties.
 State/action fields remain editorial continuity metadata, not the final prompt.
 The ongoing prose preserves established momentum and the current condition;
@@ -228,7 +232,7 @@ def window(film, start_ms, end_ms):
     return result
 
 
-def compile_window(film, seg, *, chain=False, face_identity=False):
+def compile_window(film, seg, *, chain=False, face_identity=False, reference_manifest=None):
     start=round(seg['start']*1000);end=round((seg['start']+seg['seconds'])*1000)
     rows=window(film,start,end);lines=[];shot=0;previous=None
     for row in rows:
@@ -248,14 +252,21 @@ def compile_window(film, seg, *, chain=False, face_identity=False):
     # Normalize reference aliases before keyframe insertion shifts their slots.
     canonical=lambda value:re.sub(r'<\s*(?:Image|Picture)\s*(\d+)\s*>',
         lambda m:f'<Picture {int(m[1])}>',value,flags=re.I)
-    definitions=canonical(film['subject_definitions'])
+    from banana_mv.reference_bindings import bind_definitions
+    bound,_=bind_definitions(film['subject_definitions'],reference_manifest or [])
+    definitions=canonical(bound)
+    linked={int(n) for n in re.findall(r'<Picture (\d+)>',definitions)}
+    for entry in reference_manifest or []:
+        if entry['picture'] not in linked:
+            definitions+='\n'+f'<Picture {entry["picture"]}> is the supplied visual reference labeled '+json.dumps(entry['label'],ensure_ascii=False)+'. Use this reference only for its declared subject or setting when depicted; current mutable state overrides initial appearance.'
+            linked.add(entry['picture'])
     lines=[canonical(line) for line in lines]
     if chain and seg['index']>0:
         shift=lambda s:re.sub(r'<Picture (\d+)>',lambda m:f'<Picture {int(m[1])+1}>',s)
         definitions='<Picture 1> is the actual preceding last frame, not another actor.\n'+shift(definitions)
         lines=[shift(line) for line in lines]
-    used=list(dict.fromkeys(re.findall(r'<Subject \d+>',' '.join(lines))))
-    visual_retention=[label+': fully_preserved - preserve the assigned reference identity and role; current mutable appearance follows the shot state.' for label in used]
+    used=list(dict.fromkeys(re.findall(r'<Subject \d+>',definitions+' '+ ' '.join(lines))))
+    visual_retention=[label+': fully_preserved - preserve the assigned reference role wherever this subject is visible; current mutable appearance follows the shot state.' for label in used]
     if chain and seg['index']>0:
         visual_retention.insert(0,'<Picture 1> ([Shot 1] first frame): fully_preserved - use the actual preceding last frame as the boundary anchor, not a new actor.')
     identity=(' '+FACE_GUIDANCE if face_identity else '')
@@ -293,6 +304,9 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
             direction=direction_context(req,len(originals)),
             render_windows=[{'index':s['index'],'start':s['start'],'seconds':s['seconds']} for s in segments])
     fingerprint=digest(source)
+    from banana_mv.reference_bindings import reference_manifest, bind_definitions
+    references=reference_manifest(req.get('prompt',''),len(originals))
+    source['reference_manifest']=references
     if path.is_file():
         film=parse_film(json.dumps(saved['film']),duration_ms)
         if saved['input_sha256']!=fingerprint:raise ValueError('完整攝影稿與目前素材設定不符。')
@@ -300,6 +314,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
         writer_cfg=copy.deepcopy(cfg)
         writer_cfg.setdefault('rewriter',{})['max_length']=max(16384,int(cfg.get('rewriter',{}).get('max_length',8192)))
         system=SYSTEM+'\n'+photography_system(cfg)+'\n'+direction_system(source)+'\n'+OPTIONAL_TIMING_POLICY
+        atomic_json(folder/'reference_manifest.json',references)
         writer_source={k:v for k,v in source.items() if k!='render_windows'}
         atomic_json(folder/'whole_film_input.json',{'version':2,'input_sha256':fingerprint,
             'source':writer_source,'render_windows':source.get('render_windows',[])})
@@ -341,7 +356,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
     if review_path.is_file():
         try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
         except (ValueError,OSError):pass
-    if (prior_review.get('version')==3 and prior_review.get('scope')=='whole_film'
+    if (prior_review.get('version')==4 and prior_review.get('scope')=='whole_film'
             and prior_review.get('output_hash')==content_hash(film)
             and (prior_review.get('status')!='disabled' or not req.get('screenplay_review',True))):
         audit=prior_review
@@ -353,6 +368,9 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
             atomic_json(path,{'version':2 if modern else 1,'input_sha256':fingerprint,'film':film,
                              'quality_status':audit['status']})
     warnings=delivery_warnings(cfg,film,modern)
+    if modern:
+        _,binding_warnings=bind_definitions(film['subject_definitions'],references)
+        warnings.extend(binding_warnings)
     for warning in warnings:
         if warning not in audit['warnings']:audit['warnings'].append(warning)
     if warnings and audit['status']=='passed':audit['status']='warnings'
@@ -361,13 +379,13 @@ def ensure_film(cfg, req, segments, originals, work, rewrite):
     # This is an audit artifact, not a long-duration H3 render request.
     if modern:
         full_prompt,_=compile_window(film,{'index':0,'start':0,'seconds':duration_ms/1000},
-                                    face_identity=req.get('face_identity',True))
+                                    face_identity=req.get('face_identity',True),reference_manifest=references)
         (folder/'whole_film_prompt.txt').write_text(full_prompt,encoding='utf-8')
     rows=[]
     from banana_mv.shoot_plan import validate_native_mv_format
     from banana_mv.core import normalize_mv_prompt
     for seg in segments:
-        text,local=compile_window(film,seg,chain=req.get('mode')=='chain',face_identity=modern and req.get('face_identity',True))
+        text,local=compile_window(film,seg,chain=req.get('mode')=='chain',face_identity=modern and req.get('face_identity',True),reference_manifest=references if modern else None)
         old_prompt=folder/f'{seg["index"]:02d}_prompt.txt'
         if not modern and old_prompt.is_file():text=old_prompt.read_text(encoding='utf-8')
         text=normalize_mv_prompt(text,len(originals)+int(req.get('mode')=='chain' and seg['index']>0))

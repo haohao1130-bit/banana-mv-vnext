@@ -22,6 +22,12 @@ a late lyric. Match the described action's onset, not merely interval overlap.
 The source's duration_seconds is authoritative. Do not invent timeline ranges. The original brief's explicit event windows,
 reference identities, scene-specific vocal permissions and required outcome take
 priority over generated definitions and generic ending suggestions.
+Source SRT supplies optional vocal timing and words, NOT physical story facts.
+Never infer a real final bell, violence, location or mandatory scene from a lyric
+metaphor. A sung 'bell' is not evidence that the final boxing bell has sounded.
+A story-event contradiction needs the original brief or the authored event itself,
+not lyric imagery. Check that user-required parallel narrative threads survive
+across the work; do not impose equal screen time, periodic returns or singing quotas.
 Check for events performed before their commissioned interval, an early final
 sung line or premature resolution followed by a long idle ending, and actions
 that were summarized instead of staged. A camera beat is one concrete view;
@@ -164,10 +170,11 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
     """Never reject a usable master merely because review/repair fails."""
     from banana_mv.shoot_plan import _text, _pictures
     from banana_mv.whole_film import photography_system, direction_system, photography_gaps
+    from banana_mv.reference_bindings import bind_definitions
     folder=Path(work)/'preproduction'
     folder.mkdir(exist_ok=True)
     current=copy.deepcopy(film)
-    audit={'version':3,'scope':'whole_film','status':'unchecked','rounds':0,
+    audit={'version':4,'scope':'whole_film','status':'unchecked','rounds':0,
            'checks':[],'issues':[],'repairs':[],'format_attempts':[],'warnings':[]}
     if not req.get('screenplay_review',True):
         audit['status']='disabled'
@@ -193,6 +200,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
                 {'source':source,'subject_definitions':current['subject_definitions'],
                  'clock':{k:v for k,v in clock.items() if k!='timeline'},
                  'timeline':clock['timeline'],
+                 'rendered_subject_definitions':bind_definitions(current['subject_definitions'],source.get('reference_manifest',[]))[0],
                  'camera_review_enabled':req.get('camera_review',True),
                  'render_clock':render_clock(current,source)},call,folder,f'film_review_{round_index:02d}',
                 set(range(len(current['beats']))) | {-1},req.get('review_format_retries',2))
@@ -220,6 +228,9 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
             issues=issues+exact
             audit['issues']=issues
             if not issues:
+                for repair in audit['repairs']:
+                    if repair.get('content_changed') and repair.get('issue_resolution')=='pending_recheck':
+                        repair['issue_resolution']='resolved_by_recheck'
                 audit['status']='passed';break
             if round_index==maximum:
                 audit['status']='warnings'
@@ -278,7 +289,16 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
                                 raise ValueError('Unrequested subject-definition rewrite.')
                             candidate['subject_definitions']=definitions
                     candidate=parse_film(json.dumps(candidate,ensure_ascii=False),source['duration_ms'])
-                    record.update(accepted=True,before_hash=content_hash(current),after_hash=content_hash(candidate))
+                    changed=content_hash(current)!=content_hash(candidate)
+                    record.update(accepted=True,format_accepted=True,content_changed=changed,
+                        issue_resolution='pending_recheck' if changed else 'unresolved_no_op',
+                        before_hash=content_hash(current),after_hash=content_hash(candidate))
+                    if not changed:
+                        for reason in reasons:
+                            item={'start_ms':current['beats'][lo]['at_ms'],'global':global_repair,'reason':reason['reason']}
+                            if item not in pending:pending.append(item)
+                        audit['repairs'].append(record)
+                        continue
                     pending=[v for v in pending if not (global_repair or (not v['global'] and current['beats'][lo]['at_ms']<=v['start_ms']<end))]
                     current=candidate
                 except (ValueError,KeyError,TypeError,RuntimeError,OSError) as error:
@@ -286,6 +306,9 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film):
                     for reason in reasons:
                         item={'start_ms':current['beats'][lo]['at_ms'],'global':global_repair,'reason':reason['reason']}
                         if item not in pending:pending.append(item)
+                record.setdefault('format_accepted',False)
+                record.setdefault('content_changed',False)
+                record.setdefault('issue_resolution','unresolved_failed_delivery')
                 audit['repairs'].append(record)
     except (ValueError,KeyError,TypeError,RuntimeError,OSError) as error:
         audit['status']='review_failed_open';audit['error']=str(error)
