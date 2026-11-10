@@ -51,6 +51,43 @@ class SourceDurationFinaleTests(unittest.TestCase):
         self.assertNotIn('finale_policy',a)
         self.assertNotIn('finale_policy',b)
 
+    def test_actual_textgenerate_seed_is_saved_without_prompt_data(self):
+        from unittest.mock import patch
+        from banana_mv import services
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            cfg={'comfy_input_dir':str(root),'rewriter':dict(services.DEFAULTS['rewriter'])}
+            with patch.object(services,'DATA',root):
+                graph,_=services.build_rewrite_graph(cfg,'private system',[('text','private prompt')],'run1234')
+            seed=graph['generate']['inputs']['sampling_mode.seed']
+            trace=json.loads((root/'rewriter_runs/run1234.json').read_text())
+            self.assertEqual(trace['seed'],seed)
+            self.assertEqual(trace['parameters']['mtp'],cfg['rewriter']['mtp'])
+            self.assertNotIn('private prompt',json.dumps(trace))
+            self.assertNotIn('private system',json.dumps(trace))
+
+    def test_legacy_v2_master_is_reused_without_fingerprint_migration(self):
+        from banana_mv.scene_state import digest
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            images,cfg,req=fixtures.ShootPlanTests().fixture(root)
+            req['screenplay_review']=False
+            writer=Mock(return_value=json.dumps(film()))
+            ensure_film(cfg,req,timeline(),images,root,writer)
+            folder=root/'preproduction'
+            commission=json.loads((folder/'whole_film_input.json').read_text())
+            old_source=dict(commission['source'])
+            old_source.pop('ending_policy_version')
+            old_source['ending']=ending_contract(req,9,timeline())
+            old_source['render_windows']=commission['render_windows']
+            path=folder/'whole_film.json'
+            saved=json.loads(path.read_text())
+            saved.update(version=2,input_sha256=digest(old_source))
+            path.write_text(json.dumps(saved))
+            ensure_film(cfg,req,timeline(),images,root,writer)
+            self.assertEqual(writer.call_count,1)
+            self.assertEqual(json.loads(path.read_text())['version'],2)
+
     def test_excerpt_never_receives_full_song_finale(self):
         contract=continuous_film_ending_contract({'project_scope':'excerpt'},58.5)
         self.assertFalse(contract['finish_work'])
