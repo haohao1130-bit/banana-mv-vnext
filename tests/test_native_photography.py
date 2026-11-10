@@ -71,6 +71,22 @@ class NativeH3DirectorTests(unittest.TestCase):
         self.assertEqual(cached,(actual,None))
         writer.assert_called_once()
 
+    def test_full_official_guide_survives_even_after_six_thousand_chars(self):
+        root,images,cfg,req,f,seg,compiled=self.fixture()
+        guide=root/'guide.md'
+        full='OFFICIAL_NATIVE_GUIDE_MARKER\\n'+('H3 official reference guidance. '*220)+ '\\nMANDATORY_END_OF_GUIDE_SENTINEL'
+        guide.write_text(full,encoding='utf-8')
+        writer=Mock(return_value=native_delivery([0,3000]))
+        result,warning=camera.enhance_window(cfg,req,seg,f,images,compiled,
+            writer,root,references=[{'picture':1,'label':'成人主角'}])
+        self.assertIsNone(warning)
+        self.assertIn('MANDATORY_END_OF_GUIDE_SENTINEL',writer.call_args.args[1])
+        self.assertIn(full,writer.call_args.args[1])
+        payload=json.loads(writer.call_args.args[2][0][1].split(
+            'Locked local filming commission:\\n',1)[1])
+        self.assertEqual(payload['locked_beats'][0]['at_ms'],0)
+        self.assertNotIn('whole_song_brief',payload)
+
     def test_bad_delivery_cannot_move_locked_cut_and_does_not_replace_compiler(self):
         root,images,cfg,req,f,seg,compiled=self.fixture()
         writer=Mock(return_value=native_delivery([0,2700]))
