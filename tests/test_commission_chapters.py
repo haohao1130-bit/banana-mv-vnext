@@ -83,7 +83,7 @@ class CommissionTests(unittest.TestCase):
             self.assertEqual(local['source']['creative_contract']['macro_summary'],spine['creative_contract'])
             self.assertNotIn('brief',local['source'])
             saved=json.loads((root/'preproduction/whole_film.json').read_text())
-            self.assertEqual(saved['version'],4)
+            self.assertEqual(saved['version'],5)
             self.assertEqual(len(saved['film']['authoring_chapters']),2)
             self.assertTrue((root/'preproduction/creative_contract.json').exists())
             # Resume reuses its persisted master and leaves old checkpoints alone.

@@ -17,3 +17,9 @@ The real run retained a concert return at 38.84s but review incorrectly named ch
 Local repair now salvages in-range beats for chapter zero as well as later chapters, sorts/deduplicates those timestamps, and ignores out-of-range events without clamping them into the chapter. Empty unusable repairs retain the existing bounded warning behavior. Review-format failure keeps previously discovered issues visible. Prompts explicitly check mismatched stage/ring state, hidden scene cuts and shared future-ending leakage; these semantic checks remain model judgments.
 
 The recipe-ready view suppresses the duplicate event-plan panel; after leaving recipe review the event panel remains available. The actual H3 prompt viewer is unchanged.
+
+## Upstream cast and handoff repair
+
+Actual Macro tables used identity, duties and scene_duties. The old whitelist discarded all three, leaving only IDs in early chapters. The revised adapter preserves identity/reference/role fields and excludes explicit plot-goal keys. Legacy duty strings are separated by clause, omitting obvious future-ending clauses while preserving other duties. This is conservative text cleanup, not a guarantee of semantic spoiler removal; Macro is explicitly instructed to keep plot goals out of cast definitions. Current shot state remains authoritative for mutable wardrobe and props.
+
+The previous-last-beat handoff now contains only ongoing state, ongoing camera/prose and shot ID; original initiation/action is excluded. Macro and chapter prompts require one physical location per beat and a distinct timed shot_id for actual cuts. Exit-state instructions request current conditions organized by scene, not a past-event recap. No new semantic exception or extra model call is added. New masters are v5 with a fingerprinted handoff contract and updated chapter cache key; saved v1–v4 fingerprints remain compatible. Actual 9B/H3 behavior still needs a fresh recipe run.
