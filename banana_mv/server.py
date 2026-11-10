@@ -757,13 +757,14 @@ def request_recipe_revision(job_id):
         if job.get('plan_revision')!=revision:
             raise ValueError('原丹方已變更，請重新開啟專案核對。')
         cfg=copy.deepcopy(backend.load_config())
+        originals,_,_=project_inputs(job,cfg) if job['request'].get('native_camera_version')==1 else ([],None,None)
         job['recipe_revision']={'status':'running','base_revision':revision}
         write_state(job)
         def run():
             try:
                 from banana_mv.recipe_revision import draft
                 result=draft(job_dir(job_id),job,cfg,backend.rewrite_local,
-                             advice,revision)
+                             advice,revision,originals=originals)
             except Exception as exc:
                 result={'status':'error','error':str(exc),'recipe_changed':False}
             finally:

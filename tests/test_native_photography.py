@@ -130,3 +130,51 @@ class NativeH3DirectorTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+class NativeReliabilityTests(unittest.TestCase):
+    fixture=NativeH3DirectorTests.fixture
+    def test_runtime_failure_and_missing_guide_fail_open(self):
+        root,images,cfg,req,f,seg,compiled=self.fixture()
+        req['rewrite_retries']=3
+        model=Mock(side_effect=RuntimeError('Comfy unavailable'))
+        prompt,warning=camera.enhance_window(cfg,req,seg,f,images,compiled,model,root)
+        self.assertEqual(prompt,compiled);self.assertIn('Comfy unavailable',warning)
+        self.assertEqual(model.call_count,1)
+        Path(cfg['guides']['ref']).unlink()
+        model.reset_mock()
+        prompt,warning=camera.enhance_window(cfg,req,seg,f,images,compiled,model,root)
+        self.assertEqual(prompt,compiled);self.assertIn('指南',warning);model.assert_not_called()
+    def test_cache_includes_direction_srt_music_model_and_guide(self):
+        root,images,cfg,req,f,seg,compiled=self.fixture()
+        model=Mock(return_value=native_delivery([0,3000]))
+        def run():return camera.enhance_window(cfg,req,seg,f,images,compiled,model,root)
+        run();run();self.assertEqual(model.call_count,1)
+        req['intensity']='extreme';run();self.assertEqual(model.call_count,2)
+        seg['local_srt']=[{'clip_start':1,'clip_end':2,'text':'Current line'}];run();self.assertEqual(model.call_count,3)
+        seg['audio_evidence']={'pulse':{'bpm':90}};run();self.assertEqual(model.call_count,4)
+        cfg.setdefault('rewriter',{})['temperature']=0.3;run();self.assertEqual(model.call_count,5)
+        Path(cfg['guides']['ref']).write_text('Full changed official guide');run();self.assertEqual(model.call_count,6)
+    def test_format_only_fix_avoids_a_second_generation(self):
+        root,images,cfg,req,f,seg,compiled=self.fixture()
+        model=Mock(return_value='```text\n'+native_delivery([0,3000]).replace('[Shot 1]','[Shot 1] At 0:00.0,').replace('At 00:03.000,','at 0:03.0,')+'\n```')
+        actual,warning=camera.enhance_window(cfg,req,seg,f,images,compiled,model,root)
+        self.assertIsNone(warning);self.assertEqual(model.call_count,1)
+        self.assertEqual(camera._delivered_cuts(actual),[0,3000])
+    def test_success_clears_stale_warning_and_chain_shifts_once(self):
+        root,images,cfg,req,f,seg,compiled=self.fixture()
+        camera.enhance_window(cfg,req,seg,f,images,compiled,Mock(return_value='bad'),root)
+        self.assertTrue((root/'00_native_h3_warning.json').is_file())
+        req.update(mode='chain',srt_cues=[{'start':4.2,'end':4.8,'text':'current'}])
+        seg=dict(timeline()[1],audio_evidence={})
+        model=Mock(return_value=native_delivery([0,2500]))
+        actual,warning=camera.direct_window(cfg,req,seg,f,images,model,root)
+        self.assertIsNone(warning)
+        self.assertIn('<Picture 2>',actual);self.assertNotIn('<Picture 3>',actual)
+        delivered=json.loads((root/'01_native_h3_delivery.json').read_text())
+        from banana_mv.scene_state import digest
+        self.assertEqual(delivered['final_prompt_sha256'],digest(actual))
+        payload=json.loads(model.call_args.args[2][0][1].split('Locked local filming commission:\n')[1])
+        self.assertEqual(payload['local_srt'][0]['clip_start'],0.2)
+        # A fresh success for the previously failed first window clears warning.
+        camera.enhance_window(cfg,req,timeline()[0],f,images,compiled,Mock(return_value=native_delivery([0,3000])),root)
+        self.assertFalse((root/'00_native_h3_warning.json').exists())

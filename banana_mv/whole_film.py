@@ -225,6 +225,29 @@ def _json_object(raw):
     if not isinstance(data,dict):raise ValueError('全曲攝影稿需為 JSON 物件。')
     return data
 
+def _spine_delivery(raw):
+    """Recover an early root close before chapters; never invent missing content.
+
+    Real 9B deliveries sometimes close the root after creative_contract and then
+    append ,"chapters": [...]} outside it. Join only that exact complete suffix
+    and require strict JSON parsing of the result. Other malformed output retries.
+    """
+    data=_json_object(raw)
+    if 'chapters' in data or 'beats' in data:return data,None
+    text=_text(raw).strip()
+    fenced=re.search(r'^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$',text,re.I)
+    if fenced:text=fenced.group(1).strip()
+    start=text.find('{');text=text[start:]
+    _,end=json.JSONDecoder().raw_decode(text)
+    suffix=text[end:].strip()
+    if re.match(r'^,?\s*"chapters"\s*:\s*\[',suffix):
+        joined=text[:end].rstrip()[:-1].rstrip()+','+suffix.lstrip(',').lstrip()
+        repaired=json.loads(joined)
+        if isinstance(repaired.get('chapters'),list):
+            return repaired,'joined_chapters_after_early_root_close'
+    return data,None
+
+
 def parse_film(raw, duration_ms):
     data=_json_object(raw)
     data['subject_definitions']=definition_text(data.get('subject_definitions'))
@@ -612,7 +635,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
         # Macro inference is deliberately smaller than a full-camera-script call.
         macro_cfg=copy.deepcopy(writer_cfg)
         macro_cfg['rewriter']['max_length']=min(3072,max(2048,int(cfg.get('rewriter',{}).get('max_length',8192))))
-        error=''
+        error='';spine_attempts=[]
         for attempt in range(retries+1):
             if progress:progress({'stage':'author','substage':'spine','attempt':attempt+1})
             request_id=uuid.uuid4().hex[:8]
@@ -620,18 +643,28 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
             prompt=json.dumps(macro_source,ensure_ascii=False)
             if error:prompt+='\nPREVIOUS INVALID SPINE: '+error
             raw=rewrite(macro_cfg,SPINE_SYSTEM,[('text',prompt)]+_pictures(originals),request_id)
-            (folder/f'whole_film_spine_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
+            raw_name=f'whole_film_spine_raw_{uuid.uuid4().hex[:8]}.txt'
+            (folder/raw_name).write_text(raw,encoding='utf-8')
+            record={'attempt':attempt+1,'raw_file':raw_name,'request_id':request_id}
+            spine_attempts.append(record)
             try:
-                data=_json_object(raw)
+                data,format_repair=_spine_delivery(raw)
+                record['format_repair']=format_repair
                 if 'beats' in data:
                     # Compatibility: an existing model/fixture may deliver a
                     # valid full script directly; do not pay for another call.
-                    return parse_film(raw,duration_ms)
+                    film=parse_film(raw,duration_ms)
+                    record['status']='valid'
+                    atomic_json(folder/'whole_film_spine_attempts.json',{'attempts':spine_attempts})
+                    return film
                 spine=_validated_spine(data,duration_ms,chapter_edges)
                 atomic_json(spine_path,{'input_sha256':fingerprint,'spine':spine})
+                record['status']='valid'
+                atomic_json(folder/'whole_film_spine_attempts.json',{'attempts':spine_attempts})
                 break
             except (ValueError,TypeError,KeyError) as exc:
-                error=str(exc)
+                error=str(exc);record.update(status='invalid',error=error)
+                atomic_json(folder/'whole_film_spine_attempts.json',{'attempts':spine_attempts})
                 if attempt==retries:raise
     assembled=[];previous_exit=None;previous_last=None;receipts=[]
     for index,chapter in enumerate(spine['chapters']):
@@ -847,24 +880,10 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
             # Freeze the whole-song screenplay before asking the OLD native
             # camera director to improve coverage of this one local window.
             # It uses the official H3 guide; no storyline reconstruction.
-            from banana_mv.native_photography import enhance_window
-            from banana_mv.lyrics_reference import excerpt
-            unshifted,_=compile_window(film,seg,chain=False,
-                face_identity=req.get('face_identity',True),
-                reference_manifest=references)
-            camera_seg=dict(seg,local_srt=excerpt(req,seg))
-            native,warn=enhance_window(cfg,req,camera_seg,film,originals,
-                unshifted,rewrite,folder,references=references,progress=progress)
+            from banana_mv.native_photography import direct_window
+            text,warn=direct_window(cfg,req,seg,film,originals,rewrite,folder,
+                                    references=references,progress=progress)
             if warn:native_warnings.append(warn)
-            if req.get('mode')=='chain' and seg['index']>0:
-                # No physical keyframe exists at planning time. Author with
-                # original image labels, then reserve Picture 1 for the actual
-                # previous segment frame during H3 rendering.
-                shift=lambda m:f'<Picture {int(m[1])+1}>'
-                native=re.sub(r'<Picture (\d+)>',shift,native)
-                native='subject_definitions:\n<Picture 1> is the actual preceding last frame, a continuity anchor rather than another actor.\n'+re.sub(
-                    r'^\s*subject_definitions\s*:\s*','',native,count=1)
-            text=native
         if not modern and old_prompt.is_file():text=old_prompt.read_text(encoding='utf-8')
         text=normalize_mv_prompt(text,len(originals)+int(req.get('mode')=='chain' and seg['index']>0))
         validate_native_mv_format(text,seg['seconds'],require_native=True)

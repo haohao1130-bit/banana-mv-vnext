@@ -276,3 +276,17 @@ class PreproductionTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class NativeCameraPreviewTests(unittest.TestCase):
+    def test_fallback_warning_and_final_prompt_provenance_reach_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'preproduction';folder.mkdir()
+            (folder/'ready.json').write_text('{}')
+            (root/'director_plan.json').write_text(json.dumps({'quality_warnings':['NATIVE CAMERA FALLBACK']}))
+            (folder/'00_native_h3_delivery.json').write_text(json.dumps({'status':'fallback','final_prompt_sha256':'actual'}))
+            (folder/'00_prompt.txt').write_text('actual fallback prompt')
+            result=preview({'request':{'vnext_preproduction':True},'segments':[{'index':0}]},root)
+            self.assertIn('NATIVE CAMERA FALLBACK',result['quality_warnings'])
+            self.assertEqual(result['segments'][0]['native_camera']['status'],'fallback')
+            self.assertEqual(result['segments'][0]['prompt'],'actual fallback prompt')

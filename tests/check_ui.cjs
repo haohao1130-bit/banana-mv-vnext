@@ -259,6 +259,13 @@ async function submit(){uploads.length=0;await els.form.onsubmit({preventDefault
   assert.equal(els['master-caption'].textContent,'蕉大師運功');
   vm.runInContext("renderFurnace({status:'plan_ready',recipe_advice:{status:'error'}})",context);
   assert.equal(els.furnace['data-phase'],'ready');
+  vm.runInContext("renderFurnace({status:'planning_story',planning_progress:{stage:'native_camera'}});renderProgress({status:'planning_story',planning_progress:{stage:'native_camera',done:1,attempt:1},segments:[]})",context);
+  assert.equal(els.furnace['data-phase'],'author');
+  assert(els['activity-text'].textContent.includes('H3 攝影導演'));
+  vm.runInContext("renderPrompts({id:'native-preview',segments:[{index:0,prompt:'six sections',prompt_prepared:true,native_camera:{status:'fallback'}}]})",context);
+  assert(els['prompt-note'].textContent.includes('使用編譯備稿'));
+  vm.runInContext("renderPrompts({id:'native-preview',segments:[{index:0,prompt:'native six sections',prompt_prepared:true,native_camera:{status:'native'}}]})",context);
+  assert(els['prompt-note'].textContent.includes('獨立 H3 攝影稿'));
   console.log('UI checks passed: image mentions with thumbnails, caret insertion, keyboard/IME, fixed slots, saved references, chain limits, prompt review and retakes.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 
