@@ -126,7 +126,20 @@ def photography_system(cfg):
     # Reuse the same installed guide as the native path; no download or dependency.
     guide_path=cfg.get('guides',{}).get('ref')
     guide=Path(guide_path).read_text(encoding='utf-8') if guide_path and Path(guide_path).is_file() else ''
-    return ('Official Ref2VA writing guide:\n'+guide+'\n' if guide else '')+PHOTOGRAPHY
+    # The native six-section deliverable belongs to the compiler, not this JSON
+    # transport. Feeding its retention examples here induced thousands of Shot
+    # references in real job 6d6f5c958f15 before any timeline was delivered.
+    if re.search(r'^## 1\.',guide,re.M):
+        chapters=re.split(r'(?=^## \d+\.)',guide,flags=re.M)
+        guide='\n'.join(c for c in chapters if re.match(r'^## (?:2|5)\.',c))
+    transport='''FINAL DELIVERY CONTRACT: Return only a JSON object with subject_definitions
+and beats. Do not generate summary, retention_analysis, detailed_description,
+overall_soundscape or non_diegetic_music fields: the compiler writes those six
+sections afterward. Never enumerate Shot appearances in a shared definition or
+retention list. Place each actual view on the timed beats array; camera prose is
+finished English photography for that phase only, without Shot labels.
+'''
+    return ('Official Ref2VA writing guide (reference and shot prose only):\n'+guide+'\n' if guide else '')+PHOTOGRAPHY+'\n'+transport
 
 
 

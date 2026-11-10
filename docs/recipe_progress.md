@@ -27,3 +27,16 @@ indeterminate bar, elapsed time, round text, plan-ready and loading/render state
 SVG markup parses as XML. A browser screenshot could not be produced in this
 workspace (Chromium process blocked), so actual mobile visual playback remains
 for the next UI reload. Do not interrupt a currently running job to update.
+
+## Real-run delivery loop
+
+Job 6d6f5c958f15 produced three incomplete author responses dominated by a
+retention_analysis list enumerating over 2,100 Shot references. Attempt 3 took
+230.906 seconds; no readable beats array or review had been reached in the
+synced evidence. The full official six-section instructions were competing with
+the author's JSON timeline transport. The author/repair now receives only the
+official reference-label and detailed-shot chapters, followed by an explicit
+JSON-only delivery contract. The compiler retains six-section output. No output
+budget reduction, shot-count quota or new runtime rejection gate was added.
+This removes an observed prompt conflict; successful new 9B delivery remains a
+real-run acceptance requirement, not proven by the offline regression.
