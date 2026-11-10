@@ -181,7 +181,8 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
     folder.mkdir(exist_ok=True)
     current=copy.deepcopy(film)
     audit={'version':5 if source.get('creative_contract') else 4,'scope':'whole_film','status':'unchecked','rounds':0,
-           'checks':[],'issues':[],'repairs':[],'format_attempts':[],'warnings':[]}
+           'checks':[],'issues':[],'repairs':[],'format_attempts':[],'warnings':[],
+           'commission_policy_version':2}
     if not req.get('screenplay_review',True):
         audit['status']='disabled'
         audit['warnings'].append('Whole-film semantic review was disabled; this is not a QA pass.')
@@ -347,6 +348,25 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
     return current,audit
 
 
+COMMISSION_EVIDENCE_POLICY = """EVIDENCE PRIORITY: original_brief is the authoritative commission.
+creative_contract, macro summaries and chapter plans are generated drafts to be
+verified, not additional user requirements. If a draft contradicts the original
+commission, do not force valid shots to match that draft.
+Chapter boundaries specify editable ranges, not a location lock: a concert view
+at 15s followed by a ring view at 17s is legitimate intercutting. Inspect all timed
+views in the chapter before claiming a commissioned strand has disappeared.
+SRT words and their times are vocal reference only. A lyric such as 'last ten
+seconds' or 'bell' does not establish a physical countdown or actual bell. Do not
+move a finale into an earlier chapter on that basis. Only explicit user story
+instructions or authored physical events establish such facts.
+For replay/reset, identify the specific completed event and its original time,
+then the repeated event and its later time. Similar guard, standoff, pose or
+location alone is not evidence of replay; continuing motion and fresh exchanges
+are allowed. If proof is missing, do not invent evidence or report an issue.
+Repair directions must remove an evidenced contradiction without introducing a
+new timing obligation, changing the commissioned ending or eliminating valid cuts.
+"""
+
 COMMISSION_SYSTEM = '''Review the full timeline against the ORIGINAL COMMISSION and creative_contract.
 Return JSON only: {"issues":[{"target_chapter":0,"reason":"source quote and actual timestamp evidence","repair_instruction":"minimal chapter correction"}]}.
 Chapter numbering is zero-based, from authoring_chapters, NOT Shot numbers.
@@ -376,6 +396,10 @@ Never rewrite the film here. Name the minimum chapter(s) for local repair; prese
 The reason must cite original wording and observed events/times, not keyword frequencies.'''
 
 
+COMMISSION_SYSTEM += "\n"+COMMISSION_EVIDENCE_POLICY
+REPAIR_SYSTEM += "\n"+COMMISSION_EVIDENCE_POLICY
+
+
 def commission_review(source, film, clock, call, folder, round_index, retries):
     """Bounded chapter tickets. Invalid/missing evidence is never a clean pass."""
     attempts=[];error='';chapters=source['authoring_chapters']
@@ -384,7 +408,8 @@ def commission_review(source, film, clock, call, folder, round_index, retries):
         try:
             raw=call(COMMISSION_SYSTEM+ ('\nPrevious invalid delivery: '+error if error else ''),
                 {'original_brief':source.get('brief',''),'creative_contract':source['creative_contract'],
-                 'authoring_chapters':[dict(c,target_chapter=i) for i,c in enumerate(chapters)],'timeline':clock['timeline'],
+                 'authoring_chapters':[{'target_chapter':i,'start_ms':c['start_ms'],
+                                        'end_ms':c['end_ms']} for i,c in enumerate(chapters)],'timeline':clock['timeline'],
                  'subject_definitions':film['subject_definitions'],'srt_cues':source.get('srt_cues',[])})
             (folder/name).write_text(raw,encoding='utf-8')
             body=raw.strip()

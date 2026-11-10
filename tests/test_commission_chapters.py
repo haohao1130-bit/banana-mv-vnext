@@ -108,3 +108,27 @@ class CommissionTests(unittest.TestCase):
         self.assertEqual(result['beats'][1:],film['beats'][1:])
         self.assertEqual(audit['repairs'][0]['ignored_outside_range'],3)
         self.assertNotEqual(result['beats'][0],film['beats'][0])
+    def test_real_false_rejection_inputs_use_source_not_macro_location_or_lyric_facts(self):
+        source=self.source()
+        source['authoring_chapters'][1].update(goal='MACRO_LOCATION_LOCK',entry='MACRO_LOCATION_LOCK')
+        source['authoring_chapters'][2]['exit_target']='MACRO_PREMATURE_VICTORY'
+        source['srt_cues']=[{'start':28.18,'end':30.27,'text':'別眨眼 破綻只有一次'},
+                           {'start':36,'end':38,'text':'最後十秒響起'}]
+        film=self.film()
+        film['beats'][1].update(filming_prompt='The stage singer performs at the microphone.')
+        film['beats'].insert(2,beat(17000,'ring_return','A fresh evasion and counter.'))
+        film['beats'][3].update(state='The opponents hold their current guard.',
+                               filming_prompt='A ring view shows their current guard before a fresh exchange.')
+        writer=Mock(return_value='{"issues":[]}')
+        with tempfile.TemporaryDirectory() as tmp:
+            result,audit=review_film({}, {},source,film,writer,[],tmp,parse_film)
+        payload=json.loads(writer.call_args.args[2][0][1]);system=writer.call_args.args[1]
+        self.assertEqual(result,film);self.assertEqual(audit['status'],'passed')
+        self.assertEqual(writer.call_count,1)
+        self.assertEqual(payload['original_brief'],source['brief'])
+        self.assertNotIn('MACRO_LOCATION_LOCK',json.dumps(payload))
+        self.assertNotIn('MACRO_PREMATURE_VICTORY',json.dumps(payload))
+        self.assertEqual(payload['authoring_chapters'][1],{'target_chapter':1,'start_ms':15000,'end_ms':30000})
+        self.assertIn('not a location lock',system)
+        self.assertIn('physical countdown',system)
+        self.assertIn('specific completed event and its original time',system)

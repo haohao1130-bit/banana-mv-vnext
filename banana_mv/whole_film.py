@@ -783,6 +783,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
         except (ValueError,OSError):pass
     if (prior_review.get('version')==(5 if saved_version>=4 else 4) and prior_review.get('scope')=='whole_film'
+            and (saved_version<4 or prior_review.get('commission_policy_version')==2)
             and prior_review.get('output_hash')==content_hash(film)
             and (prior_review.get('status')!='disabled' or not req.get('screenplay_review',True))):
         audit=prior_review
