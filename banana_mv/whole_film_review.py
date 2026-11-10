@@ -73,6 +73,9 @@ Optionally return "subject_definitions" ONLY when an issue explicitly identifies
 a conflicting identity/scene/vocal binding. Change only that conflicting binding;
 keep original reference mapping and all other roles intact.
 User-specified time windows override generic completion/hold suggestions.
+If editing the last beat of a source_duration_v2 film, honor source.ending and
+the user's actual final event, even when it continues to source end. Do not
+manufacture a terminal hold or apply the old per-clip ending rule.
 No new song, lyrics, speech or mandatory SRT coverage.'''
 
 
@@ -91,6 +94,9 @@ without imposing a shot quota. Current state is not action or a plot recap.
 Do not make up lyrics, musical facts, sound effects or precise sung times when no
 such timing evidence is supplied. No SRT is normal and does not require singing
 coverage. The original brief's explicit time windows still govern the story.
+For source_duration_v2 films, source.ending anchors the finale to the full
+song, never to the last render window. Keep the user's actual final event and
+last lyric at their commissioned time; do not impose a synthetic final hold.
 Optionally return subject_definitions only to correct a reported shared binding
 conflict; preserve the actual reference slots and every unaffected identity.
 Return the COMPLETE replacement timeline, not a change description."""
