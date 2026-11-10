@@ -720,6 +720,9 @@ def request_recipe_advice(job_id, instruction=''):
         job=read_state(job_id)
         if job['status']!='plan_ready':raise ValueError('請先完成丹方，再請蕉大師提供建議。')
         cfg=copy.deepcopy(backend.load_config())
+        if job.get('recipe_revision',{}).get('status')=='ready':
+            job['recipe_revision']={'status':'discarded','recipe_changed':False,
+                                    'message':'新一輪審稿已開始，上一份候選修訂版不再可採用。'}
         job['recipe_advice']={'status':'running'};write_state(job)
         def run():
             try:
