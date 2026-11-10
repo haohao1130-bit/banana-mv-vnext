@@ -49,6 +49,9 @@ def write_state(job):
         tmp = p.with_suffix('.tmp')
         tmp.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
         tmp.replace(p)
+        submitted = RUNS/job['id']/'submitted_prompt.txt'
+        if not submitted.exists():
+            submitted.write_text(job.get('request', {}).get('prompt', ''), encoding='utf-8')
 
 
 def job_dir(job_id):
