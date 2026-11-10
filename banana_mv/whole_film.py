@@ -320,9 +320,13 @@ You have the whole source duration, the user's brief and reference image roles.
 Return ONLY JSON with: subject_definitions (stable identities and scene/vocal
 duties, no story spoilers) and chapters (ordered, contiguous macro chapters).
 Every chapter needs integer start_ms, end_ms, goal, entry, exit_target.
-First start_ms is 0, last end_ms equals duration_ms. Choose chapter boundaries
-from story events and manageable writing length, typically 8-18 seconds, NOT
-from 10/15-second H3 render cuts. Allocate EVERY user-specified timed event,
+First start_ms is 0, last end_ms equals duration_ms. The supplied
+chapter_boundary_options_ms are the EXACT allowed start/end timestamps.
+Choose only those boundaries: normally one requested segment_seconds window
+(e.g. 15000 ms), or group adjacent whole windows for a Verse/Chorus act.
+NEVER invent 3600 ms micro-chapters. These are UPSTREAM AUTHORING CHAPTERS,
+not camera cuts: filming beats still follow events and music freely.
+Allocate EVERY user-specified timed event,
 its cause, consequence and finale; give the last lyric its actual place.
 Keep the user's ending; do not invent a mandatory hero hold. No six-section
 H3 essay, no [Shot N] enumeration, no detailed_description or retention_analysis.
@@ -345,10 +349,23 @@ future events. The final chapter follows the user's actual final cue and song
 duration without an invented fixed hold or premature ending.
 """
 
-def _validated_spine(data, duration_ms):
+def _chapter_boundaries(segments, duration_ms):
+    """Actual requested render-window edges are permissible AUTHORING borders."""
+    edges={0,duration_ms}
+    for seg in segments:
+        at=round(seg['start']*1000)
+        if 0<at<duration_ms:
+            edges.add(at)
+    return sorted(edges)
+
+
+def _validated_spine(data, duration_ms, chapter_boundaries_ms=None):
     definitions=definition_text(data.get('subject_definitions'))
     chapters=data.get('chapters')
-    if not isinstance(chapters,list) or len(chapters)<2 or len(chapters)>max(2,min(32,duration_ms//4000+1)):
+    # Accept a coherent but over-fragmented macro plan and COALESCE it; do not
+    # send 9B to a dozen 3.6-second calls just because it suggested tiny acts.
+    if (not isinstance(chapters,list) or len(chapters)<2 or
+            len(chapters)>max(2,min(256,duration_ms//1000+1))):
         raise ValueError('全曲骨架需為合理數量的連續創作章節。')
     at=0
     for chapter in chapters:
@@ -361,41 +378,84 @@ def _validated_spine(data, duration_ms):
                 raise ValueError('創作章節缺少事件或接力目標：'+key)
         at=chapter['end_ms']
     if at!=duration_ms:raise ValueError('全曲骨架未涵蓋歌曲尾端。')
+
+    if chapter_boundaries_ms is not None:
+        edges=sorted(set(chapter_boundaries_ms))
+        if not edges or edges[0]!=0 or edges[-1]!=duration_ms:
+            raise ValueError('創作章節對齊點未涵蓋歌曲全長。')
+        allowed=set(edges)
+        if any(c['start_ms'] not in allowed or c['end_ms'] not in allowed for c in chapters):
+            # Snap the WHOLE writing plan, not individual scene beats. Preserve
+            # every overlapping act goal in order so small narrative events do
+            # not disappear during the coalescing of micro-chapters.
+            aligned=[]
+            for start,end in zip(edges,edges[1:]):
+                active=[c for c in chapters
+                        if c['start_ms']<end and c['end_ms']>start]
+                if not active:
+                    raise ValueError('創作章節對齊後缺少故事內容。')
+                goals=list(dict.fromkeys(c['goal'] for c in active))
+                aligned.append({'start_ms':start,'end_ms':end,
+                                'goal':' -> '.join(goals),
+                                'entry':active[0]['entry'],
+                                'exit_target':active[-1]['exit_target']})
+            chapters=aligned
     return {'subject_definitions':definitions,'chapters':chapters}
+
 
 def _validated_chapter(data, spine, chapter):
     beats=data.get('beats')
     if not isinstance(beats,list) or not beats:
         raise ValueError('本章缺少 beats。')
     start,end=chapter['start_ms'],chapter['end_ms']
-    if type(beats[0].get('at_ms')) is not int or beats[0]['at_ms']!=start:
-        raise ValueError('本章第一鏡必須從章節起點開始。')
-    relative=[]
+    # One surplus beat must NOT destroy a successfully generated JSON chapter.
+    # The end boundary belongs to the next chapter: keep a beat exactly on it
+    # only by clamping it to the final millisecond of this chapter.
+    cleaned=[]
     for beat in beats:
-        if not isinstance(beat,dict) or type(beat.get('at_ms')) is not int or not start<=beat['at_ms']<end:
-            raise ValueError('本章鏡頭超出章節時間。')
+        if not isinstance(beat,dict) or type(beat.get('at_ms')) is not int:
+            continue
+        at=beat['at_ms']
+        if at<start or at>end:
+            continue
+        cleaned.append(dict(beat,at_ms=min(at,end-1)))
+    cleaned.sort(key=lambda b:b['at_ms'])
+    unique=[]
+    for beat in cleaned:
+        if unique and beat['at_ms']==unique[-1]['at_ms']:
+            continue
+        unique.append(beat)
+    if not unique:
+        raise ValueError('本章沒有落在有效時間內的鏡頭，須只重寫本章。')
+    if unique[0]['at_ms']!=start:
+        unique[0]['at_ms']=start
+    for beat in unique:
         for key in ('filming_prompt','ongoing_filming_prompt'):
             if not isinstance(beat.get(key),str) or not beat[key].strip():
                 raise ValueError('本章缺少完整 H3 拍攝描述：'+key)
-        relative.append(dict(beat,at_ms=beat['at_ms']-start))
+    relative=[dict(beat,at_ms=beat['at_ms']-start) for beat in unique]
     parse_film(json.dumps({'subject_definitions':spine['subject_definitions'],
                            'beats':relative},ensure_ascii=False),end-start)
     exit_state=data.get('exit_state')
     if not isinstance(exit_state,(str,list,dict)) or not exit_state:
         raise ValueError('本章沒有完整結尾狀態，無法交棒。')
-    return {'beats':beats,'exit_state':exit_state}
+    return {'beats':unique,'exit_state':exit_state}
+
 
 def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
-                    fingerprint, duration_ms, rewrite, progress):
+                    fingerprint, duration_ms, segments, rewrite, progress):
     """Two-level author: one macro spine, incremental chapter calls and checkpoints."""
     retries=rewrite_retry_count(req)
+    chapter_edges=_chapter_boundaries(segments,duration_ms)
     spine_path=folder/'whole_film_spine.json'
     spine=None
     if spine_path.is_file():
         try:
             cached=json.loads(spine_path.read_text(encoding='utf-8'))
             if cached.get('input_sha256')==fingerprint:
-                spine=_validated_spine(cached['spine'],duration_ms)
+                spine=_validated_spine(cached['spine'],duration_ms,chapter_edges)
+                if spine!=cached['spine']:
+                    atomic_json(spine_path,{'input_sha256':fingerprint,'spine':spine})
         except (ValueError,TypeError,KeyError,OSError):
             spine=None
     if spine is None:
@@ -406,7 +466,8 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
         for attempt in range(retries+1):
             if progress:progress({'stage':'author','substage':'spine','attempt':attempt+1})
             request_id=uuid.uuid4().hex[:8]
-            prompt=json.dumps(writer_source,ensure_ascii=False)
+            macro_source=dict(writer_source,chapter_boundary_options_ms=chapter_edges)
+            prompt=json.dumps(macro_source,ensure_ascii=False)
             if error:prompt+='\nPREVIOUS INVALID SPINE: '+error
             raw=rewrite(macro_cfg,SPINE_SYSTEM,[('text',prompt)]+_pictures(originals),request_id)
             (folder/f'whole_film_spine_raw_{uuid.uuid4().hex[:8]}.txt').write_text(raw,encoding='utf-8')
@@ -416,7 +477,7 @@ def _chained_author(cfg, req, writer_cfg, writer_source, originals, folder,
                     # Compatibility: an existing model/fixture may deliver a
                     # valid full script directly; do not pay for another call.
                     return parse_film(raw,duration_ms)
-                spine=_validated_spine(data,duration_ms)
+                spine=_validated_spine(data,duration_ms,chapter_edges)
                 atomic_json(spine_path,{'input_sha256':fingerprint,'spine':spine})
                 break
             except (ValueError,TypeError,KeyError) as exc:
@@ -536,7 +597,7 @@ def ensure_film(cfg, req, segments, originals, work, rewrite, progress=None):
         if (film is None and duration_ms>30000 and
                 req.get('authoring_mode',cfg.get('rewriter',{}).get('whole_film_mode','chained'))=='chained'):
             film=_chained_author(cfg,req,writer_cfg,writer_source,originals,folder,
-                                 fingerprint,duration_ms,rewrite,progress)
+                                 fingerprint,duration_ms,segments,rewrite,progress)
         for attempt in range(0 if film is not None else rewrite_retry_count(req)+1):
             if progress:progress({'stage':'author','attempt':attempt+1})
             started=time.monotonic()
