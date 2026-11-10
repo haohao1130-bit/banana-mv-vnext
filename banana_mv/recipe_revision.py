@@ -166,6 +166,12 @@ def draft(work, job, cfg, rewrite, advice, base_revision):
     if digest(candidate)==digest(original):
         raise ValueError('本次修訂沒有改變丹方；原稿保留。')
     plan,prompts,full_prompt=_compiled(candidate,job,folder)
+    # An AI-generated change has NOT passed the previous global QA.
+    # Preserve the earlier audit in the adoption backup and surface a warning.
+    plan['quality_status']='user_revision_unreviewed'
+    warning='使用者採用修訂版；尚未重新進行全局劇本審稿及實際影片驗證。'
+    plan['quality_warnings']=list(dict.fromkeys(
+        list(plan.get('quality_warnings') or [])+[warning]))
     before_plan=json.loads((Path(work)/'director_plan.json').read_text(encoding='utf-8'))
     preview=[]
     for seg in job['segments']:
@@ -205,9 +211,19 @@ def accept(work, job, revision, write_state, plan_revision):
     master=json.loads(master_file.read_text(encoding='utf-8'))
     if digest(master['film'])!=candidate['base_master_hash']:
         raise ValueError('原始全曲攝影稿已變更，不能套用舊修訂版。')
+    warning='使用者採用修訂版；尚未重新進行全局劇本審稿及實際影片驗證。'
+    review_path=Path(work)/'screenplay_review.json'
+    prior_review={}
+    if review_path.is_file():
+        try:prior_review=json.loads(review_path.read_text(encoding='utf-8'))
+        except (ValueError,TypeError):pass
+    review=dict(prior_review,status='user_revision_unreviewed',
+                warnings=list(dict.fromkeys(list(prior_review.get('warnings') or [])+[warning])),
+                output_hash=None,original_review_preserved_in_backup=True)
     paths={master_file:json.dumps(candidate['master'],ensure_ascii=False,indent=2),
            Path(work)/'director_plan.json':json.dumps(candidate['plan'],ensure_ascii=False,indent=2),
-           folder/'whole_film_prompt.txt':candidate['full_prompt']}
+           folder/'whole_film_prompt.txt':candidate['full_prompt'],
+           review_path:json.dumps(review,ensure_ascii=False,indent=2)}
     for seg in job['segments']:
         i=seg['index']
         paths[folder/f'{i:02d}_prompt.txt']=candidate['prompts'][str(i)]
@@ -229,6 +245,10 @@ def accept(work, job, revision, write_state, plan_revision):
             seg['prompt_prepared']=True
             seg['fixed_reference_settings']=candidate['plan']['shared_setup']
         job.pop('plan_translation',None)  # translation was for the old source revision
+        if job.get('recipe_advice'):
+            job['recipe_advice']=dict(job['recipe_advice'],
+                                      status='stale_after_adoption',
+                                      recipe_changed=True)
         job['recipe_revision']={'status':'adopted','id':revision,
                                 'base_revision':state['base_revision'],
                                 'changed_segments':state['changed_segments'],
