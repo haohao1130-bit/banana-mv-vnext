@@ -311,7 +311,7 @@ $('approve-recipe').onclick=async()=>{
  catch(e){$('recipe-feedback').textContent=e.message;busy(false);}
 };
 function eventPreview(value){const text=String(value||'').replace(/\s+/g,' ').trim();return text.length>100?text.slice(0,100)+'…':text;}
-function renderEventPlan(j){const rows=(j.segments||[]).filter(s=>s.director_plan);$('event-plan-details').hidden=!rows.length;$('event-plan-text').textContent=rows.map(s=>`${s.index+1}. ${s.director_plan.mode}\n${s.director_plan.event}`).join('\n\n');}
+function renderEventPlan(j){const rows=(j.segments||[]).filter(s=>s.director_plan);$('event-plan-details').hidden=!rows.length||j.status==='plan_ready';$('event-plan-text').textContent=rows.map(s=>`${s.index+1}. ${s.director_plan.mode}\n${s.director_plan.event}`).join('\n\n');}
 function renderProgress(j){const qaWarnings=j.quality_warnings||[];$('quality-review-warning').hidden=!qaWarnings.length;$('quality-review-warning').textContent=qaWarnings.length?'品管警告（可繼續開爐，請先審閱）：'+qaWarnings.join('；'):'';const segments=j.segments||[],done=segments.filter(s=>s.status==='done').length,total=segments.length;$('progress').max=Math.max(1,total);$('progress').value=done;$('progress-label').textContent=`整體完成 ${done}／${total} 段`+(total?`（${Math.round(done/total*100)}%）`:'');if(j.status==='plan_ready'){$('progress').max=1;$('progress').value=1;$('progress-label').textContent='丹方已備妥 · 尚未開爐拍攝';}const ended=['done','error','cancelled','interrupted','plan_ready'].includes(j.status);$('current-activity').hidden=ended;if(ended){$('activity-text').textContent='';return;}const planning=['analyzing_audio','planning_story','planning_camera','planning_state','translating_review'].includes(j.status);
 if(planning){const p=j.planning_progress||{},elapsed=Math.max(0,Math.floor(Date.now()/1000-(p.started_at||j.created||Date.now()/1000)));
 const duration=elapsed<60?`${elapsed} 秒`:`${Math.floor(elapsed/60)} 分 ${elapsed%60} 秒`;
@@ -352,6 +352,7 @@ $('open-project').onclick=async()=>{try{await openProject($('projects').value);}
 $('resume-project').onclick=async()=>{if(!active)return;busy(true);$('resume-project').hidden=true;try{await api('api/mv/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:active,rewrite_retries:Number($('rewrite_retries').value)})});clearTimeout(timer);await poll();}catch(e){message(e.message);busy(false);$('resume-project').hidden=false;}};
 active=localStorage.getItem('banana_mv_job');
 </script><script src="clip_review.js"></script></html>
+
 
 
 

@@ -320,7 +320,7 @@ from banana_mv.creative_contract import creative_contract, CONTRACT_POLICY
 SPINE_SYSTEM = """Plan one COMPLETE music video before filming prompts are expanded.
 You have the whole source duration, the user's brief and reference image roles.
 Return ONLY JSON with: subject_definitions (stable identities and scene/vocal
-duties, no story spoilers), creative_contract (100–150 words), and chapters (ordered, contiguous macro chapters).
+duties ONLY: no future victory, finale action, initial wardrobe reset or story spoilers), creative_contract (100–150 words), and chapters (ordered, contiguous macro chapters).
 The creative_contract names active strands, their scene-specific identities/vocal duties,
 commissioned intercutting, core causality and outcome. No split-screen or dual-panel:
 intercut different locations with independent timed shot_id values. Do not invent

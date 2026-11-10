@@ -228,7 +228,7 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
                                     'format_status':formats['status'],'timing_issues':exact,
                                     'window_timing_issues':window_issues})
             if issues is None:
-                audit['status']='review_failed_open';audit['issues']=exact
+                audit['status']='review_failed_open';audit['issues']=audit.get('issues',[])+exact
                 audit['error']=formats.get('error','Invalid review output')
                 audit['warnings'].append('Whole-film review incomplete; the timeline has NOT passed QA.')
                 break
@@ -295,14 +295,15 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
                     replacement=delivery['beats']
                     if not isinstance(replacement,list) or not replacement or any(not isinstance(b,dict) for b in replacement):
                         raise ValueError('Repair must contain a nonempty beats array.')
-                    # A local repair may redundantly return the entire master.
-                    # Extract only the editable interval, never apply its other edits.
-                    if (not global_repair and lo>0 and replacement[0].get('at_ms')==0):
+                    # Salvage only local records, including a whole-master return
+                    # for chapter zero. Never clamp a future event into this chapter.
+                    if not global_repair:
                         start=current['beats'][lo]['at_ms']
                         scoped=[b for b in replacement if type(b.get('at_ms')) is int and start<=b['at_ms']<end]
                         if scoped:
                             record['ignored_outside_range']=len(replacement)-len(scoped)
-                            replacement=scoped
+                            replacement=sorted(scoped,key=lambda b:b['at_ms'])
+                            replacement=list({b['at_ms']:b for b in replacement}.values())
                     if replacement[0]['at_ms']!=current['beats'][lo]['at_ms']:
                         raise ValueError('Repair moved the range entry time.')
                     if any(type(b.get('at_ms')) is not int or not current['beats'][lo]['at_ms']<=b['at_ms']<end for b in replacement):
@@ -348,7 +349,9 @@ def review_film(cfg, req, source, film, rewrite, originals, work, parse_film, pr
 
 COMMISSION_SYSTEM = '''Review the full timeline against the ORIGINAL COMMISSION and creative_contract.
 Return JSON only: {"issues":[{"target_chapter":0,"reason":"source quote and actual timestamp evidence","repair_instruction":"minimal chapter correction"}]}.
-Chapter numbering is zero-based, from authoring_chapters. Name only chapters that need changes.
+Chapter numbering is zero-based, from authoring_chapters, NOT Shot numbers.
+Include evidence_at_ms: the GLOBAL integer millisecond time of the defective view.
+Match the chapter containing that time; do not pick Chapter 0 for a later-shot fault. Name only chapters that need changes.
 Use {"issues":[]} only when all commissioned obligations are satisfied.
 Checklist: active strands and their required intercut relationship; scene-specific singer
 permissions and identity; commissioned causal milestones and ending; real timed camera cuts.
@@ -357,8 +360,18 @@ chapter without a commission-consistent resolution, reject with evidence and sel
 chapter to restore development. Do not demand each strand in every chapter, equal time or
 regular cuts. Longer uninterrupted passages and unequal irregular returns are valid.
 No split-screen or dual-panel. Different locations need separate timed beats and shot_ids.
+Inspect each beat's state AND filming prose: stage state cannot describe a ring action,
+and a single beat cannot contain a stage-to-ring cut. Shared identity definitions contain
+only stable identity and scene duties, not a future victory, ending action or wardrobe reset.
+Stage singing during an ongoing ring contest is valid intercutting, not a role violation.
+Source finale timing governs the outcome, not a presumed final-bell time from lyrics.
 Do not invent parallel narratives for single-line commissions. Lyric imagery is not story fact.
 SRT is optional. Judge explicit singing claims only when timing evidence exists.
+In repair_instruction state the narrative correction direction, what valid action,
+camera intent and achieved state to preserve, and how to reconnect to unchanged neighbors.
+For a lost strand, suggest meaningful scene development and a motivated return to the
+other strand, not a mandatory number of inserted shots or a fixed cutting schedule.
+Leave the concrete blocking, framing and cut choices to the chapter director.
 Never rewrite the film here. Name the minimum chapter(s) for local repair; preserve valid work.
 The reason must cite original wording and observed events/times, not keyword frequencies.'''
 
@@ -371,7 +384,7 @@ def commission_review(source, film, clock, call, folder, round_index, retries):
         try:
             raw=call(COMMISSION_SYSTEM+ ('\nPrevious invalid delivery: '+error if error else ''),
                 {'original_brief':source.get('brief',''),'creative_contract':source['creative_contract'],
-                 'authoring_chapters':chapters,'timeline':clock['timeline'],
+                 'authoring_chapters':[dict(c,target_chapter=i) for i,c in enumerate(chapters)],'timeline':clock['timeline'],
                  'subject_definitions':film['subject_definitions'],'srt_cues':source.get('srt_cues',[])})
             (folder/name).write_text(raw,encoding='utf-8')
             body=raw.strip()
@@ -380,14 +393,30 @@ def commission_review(source, film, clock, call, folder, round_index, retries):
             if not isinstance(data,dict) or not isinstance(data.get('issues'),list):raise ValueError('Expected issues array.')
             issues=[]
             for ticket in data['issues']:
-                n=ticket.get('target_chapter')
+                n=ticket_chapter(ticket,chapters)
                 if type(n) is not int or not 0<=n<len(chapters):raise ValueError('Name a valid target_chapter.')
                 if any(not isinstance(ticket.get(k),str) or not ticket[k].strip() for k in ('reason','repair_instruction')):
                     raise ValueError('Each ticket needs evidence and repair_instruction.')
                 idx=next(i for i,b in enumerate(film['beats']) if chapters[n]['start_ms']<=b['at_ms']<chapters[n]['end_ms'])
-                issues.append(dict(ticket,index=idx))
+                issues.append(dict(ticket,target_chapter=n,index=idx,reported_target_chapter=ticket.get('target_chapter')))
             attempts.append({'raw_file':name,'status':'valid'})
             return issues,{'status':'valid','attempts':attempts}
         except (ValueError,KeyError,TypeError,RuntimeError,OSError,StopIteration) as exc:
             error=str(exc);attempts.append({'raw_file':name,'status':'failed','error':error})
     return None,{'status':'review_failed_open','attempts':attempts,'error':error}
+
+
+def ticket_chapter(ticket, chapters):
+    """Prefer explicit evidence clocks; tolerate a model using Shot as chapter ID."""
+    at=ticket.get('evidence_at_ms')
+    if type(at) not in (int,float):
+        reason=str(ticket.get('reason',''))
+        match=re.search(r'shot[_ ]?\d+\s*(?:at\s*|\(\s*)(\d+(?:\.\d+)?)\s*(?:s\b|秒)',reason,re.I)
+        n=ticket.get('target_chapter')
+        if not match and (type(n) is not int or not 0<=n<len(chapters)):
+            match=re.search(r'(\d+(?:\.\d+)?)\s*(?:s\b|秒)',reason)
+        at=float(match[1])*1000 if match else None
+    if type(at) in (int,float):
+        for i,c in enumerate(chapters):
+            if c['start_ms']<=at<c['end_ms']:return i
+    return ticket.get('target_chapter')

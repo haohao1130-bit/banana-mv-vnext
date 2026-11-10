@@ -89,3 +89,22 @@ class CommissionTests(unittest.TestCase):
             # Resume reuses its persisted master and leaves old checkpoints alone.
             writer.reset_mock();ensure_film(cfg,req,segs,images,root,writer)
             writer.assert_not_called()
+    def test_shot_number_and_wrong_chapter_follow_evidence_clock(self):
+        from banana_mv.whole_film_review import ticket_chapter
+        chapters=self.source()['authoring_chapters']
+        for n in (0,8):
+            self.assertEqual(ticket_chapter({'target_chapter':n,'reason':'shot_9 at 38.84s has a mismatched state.'},chapters),2)
+        self.assertEqual(ticket_chapter({'target_chapter':0,'evidence_at_ms':50500,'reason':'state conflict'},chapters),3)
+    def test_chapter_zero_accepts_local_beats_from_oversized_repair(self):
+        source=self.source();film=self.film();fixed=copy.deepcopy(film['beats'])
+        fixed[0]['filming_prompt']='A single stage close-up shows the singer.'
+        fixed[-1]['action']='UNREQUESTED FUTURE CHANGE'
+        ticket={'target_chapter':0,'reason':'The opening view combines locations at 0s.',
+                'repair_instruction':'Separate current locations without altering later chapters.'}
+        writer=Mock(side_effect=[json.dumps({'issues':[ticket]}),json.dumps({'beats':fixed}),'{"issues":[]}'])
+        with tempfile.TemporaryDirectory() as tmp:
+            result,audit=review_film({}, {},source,film,writer,[],tmp,parse_film)
+        self.assertEqual(audit['status'],'passed')
+        self.assertEqual(result['beats'][1:],film['beats'][1:])
+        self.assertEqual(audit['repairs'][0]['ignored_outside_range'],3)
+        self.assertNotEqual(result['beats'][0],film['beats'][0])

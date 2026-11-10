@@ -215,8 +215,13 @@ async function submit(){uploads.length=0;await els.form.onsubmit({preventDefault
   await els['approve-recipe'].onclick();assert.deepEqual(approvals,[{id:'recipe123',revision:'recipe-v1'}]);
   assert.equal(els['recipe-review'].hidden,true);await els['approve-recipe'].onclick();assert.equal(approvals.length,1);
   vm.runInContext('busy(false)',context);
+  vm.runInContext("renderEventPlan({status:'plan_ready',segments:[{index:0,director_plan:{mode:'story',event:'one copy'}}]})",context);
+  assert.equal(els['event-plan-details'].hidden,true);
+  vm.runInContext("renderEventPlan({status:'done',segments:[{index:0,director_plan:{mode:'story',event:'one copy'}}]})",context);
+  assert.equal(els['event-plan-details'].hidden,false);
   console.log('UI checks passed: image mentions with thumbnails, caret insertion, keyboard/IME, fixed slots, saved references, chain limits, prompt review and retakes.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
 
 
 
