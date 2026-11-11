@@ -1,8 +1,12 @@
 # Banana MV VNext｜大乘蕉宗煉丹房
 
+## Colab 版本辨識
+
+**這是實驗 VNext：`BANANAMV_VNEXT.ipynb`**，不是已恢復的 Classic 正式版。Classic 公開版為 `BANANAMV_CLASSIC_PUBLIC.ipynb`（`banana-mv-public` 倉庫），私人版為 `BANANAMV_CLASSIC_PRIVATE.ipynb`（`banana-mv-colab` 倉庫）。原 `Banana_MV_Public.ipynb` 保留，避免舊 Colab 書籤失效。
+
 沿用原本一鍵 MV 的前端、Colab 安裝、H3 原曲鎖定、分段、音訊裁切、合成、素材、版本與補拍機制。只把攝影與拍攝稿準備移到開拍之前。
 
-[開啟 Colab（主線）](https://colab.research.google.com/github/haohao1130-bit/banana-mv-vnext/blob/main/Banana_MV_Public.ipynb)
+[開啟 Colab（主線）](https://colab.research.google.com/github/haohao1130-bit/banana-mv-vnext/blob/main/BANANAMV_VNEXT.ipynb)
 
 使用者已回報前版能完成成片；本次事件轉譯修正仍需另跑新任務驗證畫面。
 
